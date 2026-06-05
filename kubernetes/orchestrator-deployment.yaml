@@ -1,0 +1,130 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orchestrator
+  namespace: iso42001
+  labels:
+    app: orchestrator
+    component: orchestrator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: orchestrator
+  template:
+    metadata:
+      labels:
+        app: orchestrator
+        component: orchestrator
+    spec:
+      containers:
+        - name: orchestrator
+          image: iso42001/orchestrator:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            - name: CHROMADB_PATH
+              value: /data/chromadb
+            - name: AS1_URL
+              value: http://as1:8001
+            - name: AS2_URL
+              value: http://as2:8002
+            - name: AS3_URL
+              value: http://as3:8003
+            - name: AGA_URL
+              value: http://aga:8004
+            - name: AIU_URL
+              value: http://aiu:8005
+            - name: LLM_PROVIDER
+              valueFrom:
+                configMapKeyRef:
+                  name: iso42001-config
+                  key: LLM_PROVIDER
+            - name: OLLAMA_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: iso42001-config
+                  key: OLLAMA_BASE_URL
+            - name: OLLAMA_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: iso42001-config
+                  key: OLLAMA_MODEL
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: iso42001-secrets
+                  key: ANTHROPIC_API_KEY
+                  optional: true
+            - name: AS_TIMEOUT
+              value: "300"
+            - name: AGA_TIMEOUT
+              value: "120"
+            - name: AIU_TIMEOUT
+              value: "60"
+          volumeMounts:
+            - name: chromadb-storage
+              mountPath: /data/chromadb
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+      volumes:
+        - name: chromadb-storage
+          persistentVolumeClaim:
+            claimName: chromadb-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orchestrator
+  namespace: iso42001
+  labels:
+    app: orchestrator
+spec:
+  selector:
+    app: orchestrator
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      protocol: TCP
+  type: ClusterIP
+---
+# External access via LoadBalancer or Ingress
+apiVersion: v1
+kind: Service
+metadata:
+  name: orchestrator-external
+  namespace: iso42001
+  labels:
+    app: orchestrator
+spec:
+  selector:
+    app: orchestrator
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+      protocol: TCP
+  type: LoadBalancer

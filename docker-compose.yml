@@ -1,0 +1,245 @@
+version: "3.9"
+
+services:
+  # -------------------------------------------------------------------------
+  # Ollama — local LLM server
+  # -------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # -------------------------------------------------------------------------
+  # ChromaDB — vector database
+  # -------------------------------------------------------------------------
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: chromadb
+    ports:
+      - "8006:8000"
+    volumes:
+      - chromadb_data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - PERSIST_DIRECTORY=/chroma/chroma
+      - ANONYMIZED_TELEMETRY=FALSE
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # -------------------------------------------------------------------------
+  # AS-1: Clauses 4, 5, 6
+  # -------------------------------------------------------------------------
+  as1:
+    build:
+      context: .
+      dockerfile: services/as1/Dockerfile
+    container_name: as1
+    ports:
+      - "8001:8001"
+    volumes:
+      - chromadb_data:/data/chromadb
+    env_file:
+      - .env
+    environment:
+      - CHROMADB_PATH=/data/chromadb
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # -------------------------------------------------------------------------
+  # AS-2: Clauses 7, 8 + Annex A.2-A.6
+  # -------------------------------------------------------------------------
+  as2:
+    build:
+      context: .
+      dockerfile: services/as2/Dockerfile
+    container_name: as2
+    ports:
+      - "8002:8002"
+    volumes:
+      - chromadb_data:/data/chromadb
+    env_file:
+      - .env
+    environment:
+      - CHROMADB_PATH=/data/chromadb
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # -------------------------------------------------------------------------
+  # AS-3: Clauses 9, 10 + Annex A.7-A.10
+  # -------------------------------------------------------------------------
+  as3:
+    build:
+      context: .
+      dockerfile: services/as3/Dockerfile
+    container_name: as3
+    ports:
+      - "8003:8003"
+    volumes:
+      - chromadb_data:/data/chromadb
+    env_file:
+      - .env
+    environment:
+      - CHROMADB_PATH=/data/chromadb
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # -------------------------------------------------------------------------
+  # AGA: Gap Analysis Agent
+  # -------------------------------------------------------------------------
+  aga:
+    build:
+      context: .
+      dockerfile: services/aga/Dockerfile
+    container_name: aga
+    ports:
+      - "8004:8004"
+    volumes:
+      - chromadb_data:/data/chromadb
+    env_file:
+      - .env
+    environment:
+      - CHROMADB_PATH=/data/chromadb
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # -------------------------------------------------------------------------
+  # AIU: User Interface Agent
+  # -------------------------------------------------------------------------
+  aiu:
+    build:
+      context: .
+      dockerfile: services/aiu/Dockerfile
+    container_name: aiu
+    ports:
+      - "8005:8005"
+    volumes:
+      - chromadb_data:/data/chromadb
+    env_file:
+      - .env
+    environment:
+      - CHROMADB_PATH=/data/chromadb
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # -------------------------------------------------------------------------
+  # Orchestrator
+  # -------------------------------------------------------------------------
+  orchestrator:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+    container_name: orchestrator
+    ports:
+      - "8000:8000"
+    volumes:
+      - chromadb_data:/data/chromadb
+    env_file:
+      - .env
+    environment:
+      - CHROMADB_PATH=/data/chromadb
+      - AS1_URL=http://as1:8001
+      - AS2_URL=http://as2:8002
+      - AS3_URL=http://as3:8003
+      - AGA_URL=http://aga:8004
+      - AIU_URL=http://aiu:8005
+    depends_on:
+      as1:
+        condition: service_healthy
+      as2:
+        condition: service_healthy
+      as3:
+        condition: service_healthy
+      aga:
+        condition: service_healthy
+      aiu:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # -------------------------------------------------------------------------
+  # Streamlit UI
+  # -------------------------------------------------------------------------
+  ui:
+    build:
+      context: .
+      dockerfile: ui/Dockerfile
+    container_name: ui
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    environment:
+      - ORCHESTRATOR_URL=http://orchestrator:8000
+      - AIU_URL=http://aiu:8005
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  ollama_data:
+    driver: local
+  chromadb_data:
+    driver: local

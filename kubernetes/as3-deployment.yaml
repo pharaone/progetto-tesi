@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: as3
+  namespace: iso42001
+  labels:
+    app: as3
+    component: assessment-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: as3
+  template:
+    metadata:
+      labels:
+        app: as3
+        component: assessment-agent
+    spec:
+      containers:
+        - name: as3
+          image: iso42001/as3:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8003
+              name: http
+          env:
+            - name: CHROMADB_PATH
+              value: /data/chromadb
+            - name: LLM_PROVIDER
+              valueFrom:
+                configMapKeyRef:
+                  name: iso42001-config
+                  key: LLM_PROVIDER
+            - name: OLLAMA_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: iso42001-config
+                  key: OLLAMA_BASE_URL
+            - name: OLLAMA_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: iso42001-config
+                  key: OLLAMA_MODEL
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: iso42001-secrets
+                  key: ANTHROPIC_API_KEY
+                  optional: true
+          volumeMounts:
+            - name: chromadb-storage
+              mountPath: /data/chromadb
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8003
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8003
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+      volumes:
+        - name: chromadb-storage
+          persistentVolumeClaim:
+            claimName: chromadb-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: as3
+  namespace: iso42001
+  labels:
+    app: as3
+spec:
+  selector:
+    app: as3
+  ports:
+    - name: http
+      port: 8003
+      targetPort: 8003
+      protocol: TCP
+  type: ClusterIP
