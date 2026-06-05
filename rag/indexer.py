@@ -2,6 +2,10 @@
 
 Handles PDF and TXT files using RecursiveCharacterTextSplitter.
 Uses sentence-transformers all-MiniLM-L6-v2 via ChromaDB embedding function.
+
+ISO documents are indexed with a requirement_id metadata field extracted
+from clause/control headings (e.g. "4.1 ..." → "cl-4.1", "A.5.3 ..." → "A.5.3").
+Organizational documents are indexed without requirement_id.
 """
 
 from __future__ import annotations
@@ -9,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -24,6 +29,30 @@ logger = logging.getLogger(__name__)
 # Chunking parameters
 CHUNK_SIZE = 512
 CHUNK_OVERLAP = 64
+
+# Regex patterns for ISO clause/control headings (matched at start of a line)
+_ANNEX_HEADING = re.compile(r"^A\.(\d+)\.(\d+)(?:\.(\d+))?(?=\s|$)", re.MULTILINE)
+_CLAUSE_HEADING = re.compile(r"^(\d{1,2})\.(\d+)(?:\.(\d+))?(?=\s|$)", re.MULTILINE)
+
+
+def _extract_requirement_id(text: str) -> str:
+    """Extract the primary ISO requirement ID from a text chunk.
+
+    Checks for Annex A controls (A.x.y[.z]) first, then main clause
+    subsections (4.1 – 10.2). Returns empty string if none found.
+    """
+    m = _ANNEX_HEADING.search(text)
+    if m:
+        a, b, c = m.group(1), m.group(2), m.group(3)
+        return f"A.{a}.{b}.{c}" if c else f"A.{a}.{b}"
+
+    m = _CLAUSE_HEADING.search(text)
+    if m:
+        major, minor, sub = m.group(1), m.group(2), m.group(3)
+        if 4 <= int(major) <= 10:
+            return f"cl-{major}.{minor}.{sub}" if sub else f"cl-{major}.{minor}"
+
+    return ""
 
 _text_splitter: Optional[RecursiveCharacterTextSplitter] = None
 
@@ -140,15 +169,20 @@ def index_iso_document(file_path: str, collection_name: str) -> int:
         text, file_path, extra_metadata={"collection": collection_name, "type": "iso"}
     )
 
+    # Enrich each chunk's metadata with the requirement_id it belongs to
+    for meta, chunk in zip(metadatas, chunks):
+        meta["requirement_id"] = _extract_requirement_id(chunk)
+
     ids = [
         _make_chunk_id(file_path, i, prefix="iso_")
         for i in range(len(chunks))
     ]
 
     add_documents(collection_name, chunks, metadatas, ids)
+    tagged = sum(1 for m in metadatas if m.get("requirement_id"))
     logger.info(
-        f"Indexed {len(chunks)} chunks from {Path(file_path).name} "
-        f"into '{collection_name}'"
+        f"Indexed {len(chunks)} chunks ({tagged} with requirement_id) "
+        f"from {Path(file_path).name} into '{collection_name}'"
     )
     return len(chunks)
 

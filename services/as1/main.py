@@ -43,6 +43,7 @@ from rag.collections import (
     COLLECTION_ORG_DOCS,
     query as rag_query,
 )
+from rag.requirements_loader import load_requirements_from_rag
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
@@ -60,116 +61,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------------------------------------------------------------------------
-# Requirements catalogue for Clauses 4, 5, 6
-# ---------------------------------------------------------------------------
-REQUIREMENTS: List[Dict[str, str]] = [
-    {
-        "id": "cl-4.1",
-        "text": (
-            "The organization shall determine external and internal issues that are relevant "
-            "to its purpose and that affect its ability to achieve the intended outcome(s) of "
-            "its AI management system."
-        ),
-    },
-    {
-        "id": "cl-4.2",
-        "text": (
-            "The organization shall determine the interested parties that are relevant to the "
-            "AI management system, the relevant requirements of these interested parties, and "
-            "which of these requirements will be addressed through the AI management system."
-        ),
-    },
-    {
-        "id": "cl-4.3",
-        "text": (
-            "The organization shall determine the boundaries and applicability of the AI "
-            "management system to establish its scope. When determining this scope, the "
-            "organization shall consider the external and internal issues referred to in 4.1, "
-            "the requirements referred to in 4.2, and the interfaces and dependencies between "
-            "activities performed by the organization and those performed by other organizations."
-        ),
-    },
-    {
-        "id": "cl-4.4",
-        "text": (
-            "The organization shall establish, implement, maintain, and continually improve an "
-            "AI management system, including the processes needed and their interactions, in "
-            "accordance with the requirements of this document."
-        ),
-    },
-    {
-        "id": "cl-5.1",
-        "text": (
-            "Top management shall demonstrate leadership and commitment with respect to the AI "
-            "management system by taking accountability for the effectiveness of the AI "
-            "management system; ensuring that the AI policy and AI objectives are established "
-            "and are compatible with the strategic direction of the organization; ensuring the "
-            "integration of the AI management system requirements into the organization's "
-            "business processes; ensuring that the resources needed for the AI management "
-            "system are available; communicating the importance of effective AI management and "
-            "of conforming to the AI management system requirements; ensuring that the AI "
-            "management system achieves its intended outcome(s); and supporting other relevant "
-            "management roles to demonstrate their leadership."
-        ),
-    },
-    {
-        "id": "cl-5.2",
-        "text": (
-            "Top management shall establish, implement, and maintain an AI policy that is "
-            "appropriate to the purpose of the organization; provides a framework for setting "
-            "AI objectives; includes a commitment to satisfy applicable requirements; includes "
-            "a commitment to continual improvement of the AI management system; is available "
-            "as documented information; is communicated within the organization; and is "
-            "available to interested parties, as appropriate."
-        ),
-    },
-    {
-        "id": "cl-5.3",
-        "text": (
-            "Top management shall ensure that the responsibilities and authorities for roles "
-            "relevant to the AI management system are assigned and communicated within the "
-            "organization. Top management shall assign the responsibility and authority for "
-            "ensuring that the AI management system conforms to the requirements of this "
-            "document and for reporting on the performance of the AI management system to top "
-            "management."
-        ),
-    },
-    {
-        "id": "cl-6.1",
-        "text": (
-            "When planning for the AI management system, the organization shall consider the "
-            "issues referred to in 4.1 and the requirements referred to in 4.2, and determine "
-            "the risks and opportunities that need to be addressed to give assurance that the "
-            "AI management system can achieve its intended outcome(s); prevent, or reduce, "
-            "undesired effects; achieve continual improvement. The organization shall plan "
-            "actions to address these risks and opportunities and how to integrate and "
-            "implement these actions into its AI management system processes and evaluate the "
-            "effectiveness of these actions."
-        ),
-    },
-    {
-        "id": "cl-6.2",
-        "text": (
-            "The organization shall establish AI objectives at relevant functions, levels and "
-            "processes needed for the AI management system. The AI objectives shall be "
-            "consistent with the AI policy; be measurable (if practicable); take into account "
-            "applicable requirements; be monitored; be communicated; be updated as appropriate; "
-            "and be available as documented information. The organization shall retain documented "
-            "information on the AI objectives."
-        ),
-    },
-    {
-        "id": "cl-6.3",
-        "text": (
-            "When the organization determines the need for changes to the AI management system, "
-            "the changes shall be carried out in a planned manner. The organization shall "
-            "consider the purpose of the changes and their potential consequences; the integrity "
-            "of the AI management system; the availability of resources; and the allocation or "
-            "reallocation of responsibilities and authorities."
-        ),
-    },
-]
+# Section prefixes that AS-1 is responsible for
+_AS1_PREFIXES = ["cl-4", "cl-5", "cl-6"]
 
 # ---------------------------------------------------------------------------
 # Prompt template
@@ -453,9 +346,23 @@ async def analyze(request: AnalyzeRequest) -> List[EvaluationCard]:
     if not request.documents:
         raise HTTPException(status_code=400, detail="At least one document is required")
 
+    # Load requirements from ISO RAG collection
+    requirements = load_requirements_from_rag(COLLECTION_ISO_CL456, _AS1_PREFIXES)
+    if not requirements:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "ISO/IEC 42001 standard not indexed in the RAG collection ISO-CL456. "
+                "Index the ISO document first using scripts/index_iso.py."
+            ),
+        )
+
     # Compute input hash
     input_hash = request.compute_input_hash()
-    logger.info(f"AS-1 analyze: org_id={org_id}, docs={len(request.documents)}, hash={input_hash[:8]}")
+    logger.info(
+        f"AS-1 analyze: org_id={org_id}, docs={len(request.documents)}, "
+        f"requirements={len(requirements)}, hash={input_hash[:8]}"
+    )
 
     # Index documents into ORG-DOCS for this session
     from rag.indexer import index_text_as_org_doc
@@ -468,7 +375,7 @@ async def analyze(request: AnalyzeRequest) -> List[EvaluationCard]:
     # Evaluate each requirement
     evaluation_cards: List[EvaluationCard] = []
 
-    for requirement in REQUIREMENTS:
+    for requirement in requirements:
         logger.info(f"Evaluating requirement {requirement['id']}")
         query_text = f"{requirement['id']} {requirement['text'][:200]}"
 

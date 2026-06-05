@@ -41,6 +41,7 @@ from rag.collections import (
     COLLECTION_ORG_DOCS,
     query as rag_query,
 )
+from rag.requirements_loader import load_requirements_from_rag
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
@@ -58,185 +59,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------------------------------------------------------------------------
-# Requirements catalogue
-# ---------------------------------------------------------------------------
-REQUIREMENTS: List[Dict[str, str]] = [
-    # Clause 9: Performance evaluation
-    {
-        "id": "cl-9.1",
-        "text": (
-            "The organization shall determine what needs to be monitored and measured regarding "
-            "the AI management system and AI system performance; the methods for monitoring, "
-            "measurement, analysis, and evaluation needed to ensure valid results; when the "
-            "monitoring and measuring shall be performed; when the results from monitoring and "
-            "measurement shall be analysed and evaluated; and who shall analyse and evaluate "
-            "these results. The organization shall retain appropriate documented information "
-            "as evidence of the results."
-        ),
-    },
-    {
-        "id": "cl-9.2",
-        "text": (
-            "The organization shall conduct internal audits at planned intervals to provide "
-            "information on whether the AI management system conforms to the organization's "
-            "own requirements for its AI management system and the requirements of this "
-            "document, and is effectively implemented and maintained. The organization shall "
-            "plan, establish, implement, and maintain an audit programme."
-        ),
-    },
-    {
-        "id": "cl-9.3",
-        "text": (
-            "Top management shall review the organization's AI management system at planned "
-            "intervals to ensure its continuing suitability, adequacy, and effectiveness. "
-            "The management review shall include consideration of the status of actions from "
-            "previous management reviews; changes in external and internal issues relevant "
-            "to the AI management system; information on AI management system performance; "
-            "adequacy of resources; the effectiveness of actions taken to address risks and "
-            "opportunities; and opportunities for continual improvement."
-        ),
-    },
-    # Clause 10: Improvement
-    {
-        "id": "cl-10.1",
-        "text": (
-            "When a nonconformity occurs, the organization shall react to the nonconformity "
-            "by taking action to control and correct it and deal with the consequences; "
-            "evaluate the need for action to eliminate the causes of the nonconformity in "
-            "order that it does not recur or occur elsewhere, by reviewing the nonconformity, "
-            "determining the causes, and determining if similar nonconformities exist or could "
-            "potentially occur; implement any action needed; review the effectiveness of any "
-            "corrective action taken; and make changes to the AI management system if necessary."
-        ),
-    },
-    {
-        "id": "cl-10.2",
-        "text": (
-            "The organization shall continually improve the suitability, adequacy, and "
-            "effectiveness of the AI management system."
-        ),
-    },
-    # Annex A Controls A.7
-    {
-        "id": "A.7.1",
-        "text": (
-            "A.7.1 AI system transparency documentation: The organization shall create and "
-            "maintain documentation that enables stakeholders to understand how AI systems "
-            "work, including system purpose, capabilities, limitations, and intended use cases."
-        ),
-    },
-    {
-        "id": "A.7.2",
-        "text": (
-            "A.7.2 AI system explainability: The organization shall implement mechanisms "
-            "to provide meaningful explanations of AI system outputs and decisions to "
-            "relevant stakeholders, proportionate to the risk and impact of AI system decisions."
-        ),
-    },
-    {
-        "id": "A.7.3",
-        "text": (
-            "A.7.3 Communication about AI systems to users: The organization shall "
-            "communicate relevant information about AI systems to users including system "
-            "purpose, capabilities, limitations, and how to interpret outputs."
-        ),
-    },
-    {
-        "id": "A.7.4",
-        "text": (
-            "A.7.4 Communication about AI systems to affected persons: The organization "
-            "shall communicate to persons affected by AI system decisions the fact that "
-            "a decision was made by or with assistance of an AI system, and relevant "
-            "information about how to seek review or redress."
-        ),
-    },
-    {
-        "id": "A.7.5",
-        "text": (
-            "A.7.5 AI system user information: The organization shall provide users of "
-            "AI systems with appropriate information and training to enable them to use "
-            "AI systems effectively and responsibly."
-        ),
-    },
-    # Annex A Controls A.8
-    {
-        "id": "A.8.1",
-        "text": (
-            "A.8.1 Human oversight controls: The organization shall implement human oversight "
-            "controls for AI systems proportionate to the risk level, including mechanisms "
-            "for humans to monitor, intervene in, and override AI system decisions."
-        ),
-    },
-    {
-        "id": "A.8.2",
-        "text": (
-            "A.8.2 AI system logging: The organization shall implement logging mechanisms "
-            "for AI systems to record system inputs, outputs, decisions, and operational "
-            "events to support auditability and incident investigation."
-        ),
-    },
-    {
-        "id": "A.8.3",
-        "text": (
-            "A.8.3 Training of human overseers: The organization shall provide appropriate "
-            "training to persons responsible for human oversight of AI systems to ensure "
-            "they can effectively perform their oversight role."
-        ),
-    },
-    {
-        "id": "A.8.4",
-        "text": (
-            "A.8.4 Human override controls: The organization shall implement controls that "
-            "enable authorized humans to override or stop AI system operation when necessary "
-            "to prevent or mitigate harm."
-        ),
-    },
-    # Annex A Controls A.9
-    {
-        "id": "A.9.1",
-        "text": (
-            "A.9.1 Assessment of AI system objectives achievement: The organization shall "
-            "implement processes to assess whether AI systems are achieving their intended "
-            "objectives and producing outcomes consistent with the AI policy and organizational "
-            "values."
-        ),
-    },
-    {
-        "id": "A.9.2",
-        "text": (
-            "A.9.2 Processes for considering and acting on concerns or complaints: The "
-            "organization shall implement processes to receive, consider, and act on concerns "
-            "and complaints from stakeholders regarding AI system performance, fairness, "
-            "or impacts."
-        ),
-    },
-    # Annex A Controls A.10
-    {
-        "id": "A.10.1",
-        "text": (
-            "A.10.1 Improvement of AI systems: The organization shall implement processes "
-            "for the continual improvement of AI systems based on monitoring results, "
-            "feedback, incidents, and changing requirements."
-        ),
-    },
-    {
-        "id": "A.10.2",
-        "text": (
-            "A.10.2 AI system bias and fairness: The organization shall implement processes "
-            "to identify, assess, and mitigate bias in AI systems that could lead to unfair "
-            "or discriminatory outcomes."
-        ),
-    },
-    {
-        "id": "A.10.3",
-        "text": (
-            "A.10.3 AI system robustness and security: The organization shall implement "
-            "controls to ensure AI systems are robust against adversarial inputs, data "
-            "poisoning, model theft, and other security threats specific to AI systems."
-        ),
-    },
-]
+# Section prefixes that AS-3 is responsible for
+_AS3_PREFIXES = ["cl-9", "cl-10", "A.7", "A.8", "A.9", "A.10"]
 
 # ---------------------------------------------------------------------------
 # Prompt template
@@ -496,8 +320,22 @@ async def analyze(request: AnalyzeRequest) -> List[EvaluationCard]:
     if not request.documents:
         raise HTTPException(status_code=400, detail="At least one document is required")
 
+    # Load requirements from ISO RAG collection
+    requirements = load_requirements_from_rag(COLLECTION_ISO_CL910_A710, _AS3_PREFIXES)
+    if not requirements:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "ISO/IEC 42001 standard not indexed in the RAG collection ISO-CL910-A710. "
+                "Index the ISO document first using scripts/index_iso.py."
+            ),
+        )
+
     input_hash = request.compute_input_hash()
-    logger.info(f"AS-3 analyze: org_id={org_id}, docs={len(request.documents)}, hash={input_hash[:8]}")
+    logger.info(
+        f"AS-3 analyze: org_id={org_id}, docs={len(request.documents)}, "
+        f"requirements={len(requirements)}, hash={input_hash[:8]}"
+    )
 
     from rag.indexer import index_text_as_org_doc
     for doc in request.documents:
@@ -508,7 +346,7 @@ async def analyze(request: AnalyzeRequest) -> List[EvaluationCard]:
 
     evaluation_cards: List[EvaluationCard] = []
 
-    for requirement in REQUIREMENTS:
+    for requirement in requirements:
         logger.info(f"Evaluating requirement {requirement['id']}")
         query_text = f"{requirement['id']} {requirement['text'][:200]}"
 

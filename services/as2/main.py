@@ -41,6 +41,7 @@ from rag.collections import (
     COLLECTION_ORG_DOCS,
     query as rag_query,
 )
+from rag.requirements_loader import load_requirements_from_rag
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
@@ -58,288 +59,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------------------------------------------------------------------------
-# Requirements catalogue
-# ---------------------------------------------------------------------------
-REQUIREMENTS: List[Dict[str, str]] = [
-    # Clause 7: Support
-    {
-        "id": "cl-7.1",
-        "text": (
-            "The organization shall determine and provide the resources needed for the "
-            "establishment, implementation, maintenance, and continual improvement of the "
-            "AI management system, including human resources and technical infrastructure."
-        ),
-    },
-    {
-        "id": "cl-7.2",
-        "text": (
-            "The organization shall determine the necessary competence of person(s) doing work "
-            "under its control that affects its AI performance; ensure that these persons are "
-            "competent on the basis of appropriate education, training, or experience; where "
-            "applicable, take actions to acquire the necessary competence and evaluate the "
-            "effectiveness of the actions taken; and retain appropriate documented information "
-            "as evidence of competence."
-        ),
-    },
-    {
-        "id": "cl-7.3",
-        "text": (
-            "Persons doing work under the organization's control shall be made aware of the AI "
-            "policy; their contribution to the effectiveness of the AI management system, "
-            "including the benefits of improved AI performance; and the implications of not "
-            "conforming with the AI management system requirements."
-        ),
-    },
-    {
-        "id": "cl-7.4",
-        "text": (
-            "The organization shall determine the need for internal and external communications "
-            "relevant to the AI management system, including on what it will communicate, when "
-            "to communicate, with whom to communicate, how to communicate, and who communicates."
-        ),
-    },
-    {
-        "id": "cl-7.5",
-        "text": (
-            "The organization's AI management system shall include documented information "
-            "required by this document, determined by the organization as being necessary for "
-            "the effectiveness of the AI management system. When creating and updating documented "
-            "information, the organization shall ensure appropriate identification, format, "
-            "review, approval, storage, protection, retrieval, distribution, and disposition."
-        ),
-    },
-    # Clause 8: Operations
-    {
-        "id": "cl-8.1",
-        "text": (
-            "The organization shall plan, implement, control, monitor, and review the processes "
-            "needed to meet requirements for the provision of AI systems, and to implement the "
-            "actions determined in Clause 6, by establishing criteria for the processes and "
-            "implementing control of the processes in accordance with the criteria."
-        ),
-    },
-    {
-        "id": "cl-8.2",
-        "text": (
-            "The organization shall implement processes to ensure that requirements related to "
-            "AI systems are determined, including applicable legal requirements, and that "
-            "technical and operational requirements for AI systems are documented."
-        ),
-    },
-    {
-        "id": "cl-8.3",
-        "text": (
-            "The organization shall establish, implement, and maintain a process for the design "
-            "and development of AI systems that includes planning of design and development, "
-            "design and development inputs, controls, outputs, and changes."
-        ),
-    },
-    {
-        "id": "cl-8.4",
-        "text": (
-            "The organization shall establish and implement processes to verify that externally "
-            "provided AI systems, components, or services meet specified requirements before "
-            "use, including supplier evaluation and monitoring."
-        ),
-    },
-    # Annex A Controls A.2
-    {
-        "id": "A.2.1",
-        "text": (
-            "A.2.1 AI system impact assessment: The organization shall assess and document the "
-            "potential impacts of AI systems on individuals, groups, and society before deployment "
-            "and throughout the AI system lifecycle."
-        ),
-    },
-    {
-        "id": "A.2.2",
-        "text": (
-            "A.2.2 AI system impact assessment review: The organization shall review AI system "
-            "impact assessments periodically and when significant changes are made to AI systems "
-            "or their operating context."
-        ),
-    },
-    # Annex A Controls A.3
-    {
-        "id": "A.3.1",
-        "text": (
-            "A.3.1 AI system inventory: The organization shall establish and maintain an "
-            "inventory of AI systems that includes the purpose, intended use, deployment context, "
-            "data used, and responsible parties for each AI system."
-        ),
-    },
-    # Annex A Controls A.4
-    {
-        "id": "A.4.1",
-        "text": (
-            "A.4.1 Policies for responsible AI: The organization shall establish policies for "
-            "responsible development, deployment, and use of AI systems, addressing ethical "
-            "considerations, fairness, transparency, explainability, and accountability."
-        ),
-    },
-    {
-        "id": "A.4.2",
-        "text": (
-            "A.4.2 Processes for responsible AI: The organization shall implement processes "
-            "to operationalize responsible AI policies throughout the AI system lifecycle."
-        ),
-    },
-    # Annex A Controls A.5
-    {
-        "id": "A.5.1",
-        "text": (
-            "A.5.1 AI system data governance: The organization shall establish data governance "
-            "processes for AI systems, including data quality, data sourcing, data documentation, "
-            "and data management throughout the AI system lifecycle."
-        ),
-    },
-    {
-        "id": "A.5.2",
-        "text": (
-            "A.5.2 Data acquisition for AI systems: The organization shall implement processes "
-            "to ensure that data used for AI systems is acquired in a lawful, ethical, and "
-            "documented manner appropriate for the intended AI system purpose."
-        ),
-    },
-    {
-        "id": "A.5.3",
-        "text": (
-            "A.5.3 Data quality for AI systems: The organization shall implement controls to "
-            "ensure that data used in AI systems meets defined quality criteria including "
-            "accuracy, completeness, consistency, timeliness, and relevance."
-        ),
-    },
-    {
-        "id": "A.5.4",
-        "text": (
-            "A.5.4 Data preparation for AI systems: The organization shall implement and "
-            "document data preparation processes including cleaning, transformation, labelling, "
-            "and augmentation for AI systems."
-        ),
-    },
-    {
-        "id": "A.5.5",
-        "text": (
-            "A.5.5 Data documentation for AI systems: The organization shall create and maintain "
-            "documentation of datasets used for training, testing, and operating AI systems, "
-            "including data sources, characteristics, and known limitations."
-        ),
-    },
-    {
-        "id": "A.5.6",
-        "text": (
-            "A.5.6 Data access control for AI systems: The organization shall implement access "
-            "controls for data used in AI systems to prevent unauthorized access, modification, "
-            "or misuse."
-        ),
-    },
-    {
-        "id": "A.5.7",
-        "text": (
-            "A.5.7 AI system data provenance: The organization shall track and document the "
-            "origin, transformations, and chain of custody of data used in AI systems to "
-            "support auditability and traceability."
-        ),
-    },
-    # Annex A Controls A.6
-    {
-        "id": "A.6.1.1",
-        "text": (
-            "A.6.1.1 Establishment of AI system operational objectives: The organization shall "
-            "establish measurable operational objectives for AI systems aligned with the "
-            "organization's AI policy and intended outcomes."
-        ),
-    },
-    {
-        "id": "A.6.1.2",
-        "text": (
-            "A.6.1.2 AI system design: The organization shall design AI systems with appropriate "
-            "consideration of performance, safety, security, privacy, fairness, transparency, "
-            "and explainability requirements."
-        ),
-    },
-    {
-        "id": "A.6.1.3",
-        "text": (
-            "A.6.1.3 AI system model documentation: The organization shall document AI system "
-            "models including architecture, training procedures, hyperparameters, evaluation "
-            "metrics, and known limitations."
-        ),
-    },
-    {
-        "id": "A.6.1.4",
-        "text": (
-            "A.6.1.4 AI system testing: The organization shall implement systematic testing "
-            "of AI systems including functional testing, performance testing, safety testing, "
-            "robustness testing, and bias testing before deployment."
-        ),
-    },
-    {
-        "id": "A.6.2.1",
-        "text": (
-            "A.6.2.1 AI system deployment: The organization shall implement controlled "
-            "deployment processes for AI systems including staged rollout, monitoring setup, "
-            "and rollback procedures."
-        ),
-    },
-    {
-        "id": "A.6.2.2",
-        "text": (
-            "A.6.2.2 Human oversight of AI systems: The organization shall implement "
-            "appropriate human oversight mechanisms for AI systems, proportionate to the "
-            "level of risk and autonomy of the AI system."
-        ),
-    },
-    {
-        "id": "A.6.2.3",
-        "text": (
-            "A.6.2.3 AI system monitoring: The organization shall implement continuous "
-            "monitoring of AI systems in operation to detect performance degradation, "
-            "unexpected behavior, and emerging risks."
-        ),
-    },
-    {
-        "id": "A.6.2.4",
-        "text": (
-            "A.6.2.4 AI system incident management: The organization shall establish processes "
-            "for detecting, reporting, assessing, and responding to AI system incidents "
-            "including adverse events and near-misses."
-        ),
-    },
-    {
-        "id": "A.6.2.5",
-        "text": (
-            "A.6.2.5 AI system change management: The organization shall implement change "
-            "management processes for AI systems to ensure that changes are assessed, "
-            "approved, tested, and documented before implementation."
-        ),
-    },
-    {
-        "id": "A.6.2.6",
-        "text": (
-            "A.6.2.6 AI system decommissioning: The organization shall implement processes "
-            "for the planned retirement and decommissioning of AI systems, including data "
-            "handling, user notification, and documentation."
-        ),
-    },
-    {
-        "id": "A.6.2.7",
-        "text": (
-            "A.6.2.7 AI system record keeping: The organization shall maintain records of "
-            "AI system operations, decisions, incidents, and changes to support auditability, "
-            "accountability, and continual improvement."
-        ),
-    },
-    {
-        "id": "A.6.2.8",
-        "text": (
-            "A.6.2.8 Feedback mechanisms for AI systems: The organization shall implement "
-            "mechanisms to collect, analyze, and act on feedback from users and affected "
-            "parties about AI system performance and impacts."
-        ),
-    },
-]
+# Section prefixes that AS-2 is responsible for
+_AS2_PREFIXES = ["cl-7", "cl-8", "A.2", "A.3", "A.4", "A.5", "A.6"]
 
 # ---------------------------------------------------------------------------
 # Prompt template (same structure as AS-1)
@@ -599,8 +320,22 @@ async def analyze(request: AnalyzeRequest) -> List[EvaluationCard]:
     if not request.documents:
         raise HTTPException(status_code=400, detail="At least one document is required")
 
+    # Load requirements from ISO RAG collection
+    requirements = load_requirements_from_rag(COLLECTION_ISO_CL78_A26, _AS2_PREFIXES)
+    if not requirements:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "ISO/IEC 42001 standard not indexed in the RAG collection ISO-CL78-A26. "
+                "Index the ISO document first using scripts/index_iso.py."
+            ),
+        )
+
     input_hash = request.compute_input_hash()
-    logger.info(f"AS-2 analyze: org_id={org_id}, docs={len(request.documents)}, hash={input_hash[:8]}")
+    logger.info(
+        f"AS-2 analyze: org_id={org_id}, docs={len(request.documents)}, "
+        f"requirements={len(requirements)}, hash={input_hash[:8]}"
+    )
 
     from rag.indexer import index_text_as_org_doc
     for doc in request.documents:
@@ -611,7 +346,7 @@ async def analyze(request: AnalyzeRequest) -> List[EvaluationCard]:
 
     evaluation_cards: List[EvaluationCard] = []
 
-    for requirement in REQUIREMENTS:
+    for requirement in requirements:
         logger.info(f"Evaluating requirement {requirement['id']}")
         query_text = f"{requirement['id']} {requirement['text'][:200]}"
 
