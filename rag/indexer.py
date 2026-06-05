@@ -1,0 +1,238 @@
+"""Document indexer for ISO/IEC 42001 gap analysis system.
+
+Handles PDF and TXT files using RecursiveCharacterTextSplitter.
+Uses sentence-transformers all-MiniLM-L6-v2 via ChromaDB embedding function.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import logging
+import os
+from pathlib import Path
+from typing import List, Optional, Tuple
+
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+from rag.collections import (
+    COLLECTION_ORG_DOCS,
+    add_documents,
+)
+
+logger = logging.getLogger(__name__)
+
+# Chunking parameters
+CHUNK_SIZE = 512
+CHUNK_OVERLAP = 64
+
+_text_splitter: Optional[RecursiveCharacterTextSplitter] = None
+
+
+def _get_splitter() -> RecursiveCharacterTextSplitter:
+    global _text_splitter
+    if _text_splitter is None:
+        _text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=CHUNK_SIZE,
+            chunk_overlap=CHUNK_OVERLAP,
+            length_function=len,
+            separators=["\n\n", "\n", " ", ""],
+        )
+    return _text_splitter
+
+
+def _extract_text_from_pdf(file_path: str) -> str:
+    """Extract text from a PDF file."""
+    try:
+        import pypdf
+
+        text_parts = []
+        with open(file_path, "rb") as f:
+            reader = pypdf.PdfReader(f)
+            for page in reader.pages:
+                text = page.extract_text()
+                if text:
+                    text_parts.append(text)
+        return "\n\n".join(text_parts)
+    except ImportError:
+        # Fallback: try pdfminer
+        try:
+            from pdfminer.high_level import extract_text as pdfminer_extract
+
+            return pdfminer_extract(file_path)
+        except ImportError:
+            logger.error(
+                "Neither pypdf nor pdfminer.six is installed. Cannot extract PDF text."
+            )
+            raise RuntimeError(
+                "PDF extraction requires pypdf or pdfminer.six. "
+                "Install with: pip install pypdf"
+            )
+
+
+def _extract_text(file_path: str) -> str:
+    """Extract text from a file (PDF or TXT)."""
+    path = Path(file_path)
+    suffix = path.suffix.lower()
+
+    if suffix == ".pdf":
+        return _extract_text_from_pdf(file_path)
+    elif suffix in (".txt", ".md", ".rst", ".text"):
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+    else:
+        # Try reading as text for unknown extensions
+        logger.warning(
+            f"Unknown file extension '{suffix}' for {file_path}, attempting text read"
+        )
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+
+
+def _chunk_text(
+    text: str,
+    source_path: str,
+    extra_metadata: Optional[dict] = None,
+) -> Tuple[List[str], List[dict]]:
+    """Split text into chunks and build metadata."""
+    splitter = _get_splitter()
+    chunks = splitter.split_text(text)
+    filename = Path(source_path).name
+
+    metadatas = []
+    for i, _ in enumerate(chunks):
+        meta = {
+            "source": filename,
+            "chunk_index": i,
+            "total_chunks": len(chunks),
+        }
+        if extra_metadata:
+            meta.update(extra_metadata)
+        metadatas.append(meta)
+
+    return chunks, metadatas
+
+
+def _make_chunk_id(source: str, chunk_index: int, prefix: str = "") -> str:
+    """Generate a deterministic chunk ID."""
+    raw = f"{prefix}{source}_{chunk_index}"
+    short_hash = hashlib.md5(raw.encode()).hexdigest()[:8]
+    return f"{prefix}{Path(source).stem}_{chunk_index}_{short_hash}"
+
+
+def index_iso_document(file_path: str, collection_name: str) -> int:
+    """
+    Index an ISO document into the specified ChromaDB collection.
+
+    Args:
+        file_path: Path to the ISO document (PDF or TXT).
+        collection_name: Target ChromaDB collection name.
+
+    Returns:
+        Number of chunks indexed.
+    """
+    logger.info(f"Indexing ISO document: {file_path} → {collection_name}")
+    text = _extract_text(file_path)
+    if not text.strip():
+        logger.warning(f"No text extracted from {file_path}")
+        return 0
+
+    chunks, metadatas = _chunk_text(
+        text, file_path, extra_metadata={"collection": collection_name, "type": "iso"}
+    )
+
+    ids = [
+        _make_chunk_id(file_path, i, prefix="iso_")
+        for i in range(len(chunks))
+    ]
+
+    add_documents(collection_name, chunks, metadatas, ids)
+    logger.info(
+        f"Indexed {len(chunks)} chunks from {Path(file_path).name} "
+        f"into '{collection_name}'"
+    )
+    return len(chunks)
+
+
+def index_org_docs(file_paths: List[str], org_id: str) -> int:
+    """
+    Index organizational documents into the ORG-DOCS collection.
+
+    Args:
+        file_paths: List of file paths to index.
+        org_id: Organization identifier (used as prefix for chunk IDs).
+
+    Returns:
+        Total number of chunks indexed.
+    """
+    total_chunks = 0
+
+    for file_path in file_paths:
+        logger.info(f"Indexing org doc: {file_path} for org_id={org_id}")
+        try:
+            text = _extract_text(file_path)
+            if not text.strip():
+                logger.warning(f"No text extracted from {file_path}")
+                continue
+
+            chunks, metadatas = _chunk_text(
+                text,
+                file_path,
+                extra_metadata={"org_id": org_id, "type": "org_doc"},
+            )
+
+            # Prefix IDs with org_id for multi-tenancy
+            ids = [
+                _make_chunk_id(file_path, i, prefix=f"{org_id}_")
+                for i in range(len(chunks))
+            ]
+
+            add_documents(COLLECTION_ORG_DOCS, chunks, metadatas, ids)
+            total_chunks += len(chunks)
+
+        except Exception as exc:
+            logger.error(f"Failed to index {file_path}: {exc}", exc_info=True)
+
+    logger.info(
+        f"Indexed {total_chunks} total chunks for org_id={org_id} "
+        f"into '{COLLECTION_ORG_DOCS}'"
+    )
+    return total_chunks
+
+
+def index_text_as_org_doc(
+    content: str,
+    filename: str,
+    org_id: str,
+) -> int:
+    """
+    Index raw text content as an organizational document.
+
+    Args:
+        content: Text content to index.
+        filename: Logical filename for metadata.
+        org_id: Organization identifier.
+
+    Returns:
+        Number of chunks indexed.
+    """
+    if not content.strip():
+        logger.warning(f"Empty content for {filename}, skipping")
+        return 0
+
+    chunks, metadatas = _chunk_text(
+        content,
+        filename,
+        extra_metadata={"org_id": org_id, "type": "org_doc"},
+    )
+
+    ids = [
+        _make_chunk_id(filename, i, prefix=f"{org_id}_")
+        for i in range(len(chunks))
+    ]
+
+    add_documents(COLLECTION_ORG_DOCS, chunks, metadatas, ids)
+    logger.info(
+        f"Indexed {len(chunks)} chunks from text '{filename}' "
+        f"for org_id={org_id}"
+    )
+    return len(chunks)
