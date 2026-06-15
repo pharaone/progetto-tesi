@@ -15,11 +15,11 @@ services:
       - OLLAMA_KEEP_ALIVE=24h
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:11434/api/tags > /dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 60s
+      start_period: 30s
 
   # -------------------------------------------------------------------------
   # ChromaDB — vector database
@@ -61,7 +61,7 @@ services:
       - CHROMADB_PATH=/data/chromadb
     depends_on:
       ollama:
-        condition: service_healthy
+        condition: service_started
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
@@ -88,7 +88,7 @@ services:
       - CHROMADB_PATH=/data/chromadb
     depends_on:
       ollama:
-        condition: service_healthy
+        condition: service_started
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
@@ -115,7 +115,7 @@ services:
       - CHROMADB_PATH=/data/chromadb
     depends_on:
       ollama:
-        condition: service_healthy
+        condition: service_started
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
@@ -142,7 +142,7 @@ services:
       - CHROMADB_PATH=/data/chromadb
     depends_on:
       ollama:
-        condition: service_healthy
+        condition: service_started
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
@@ -169,7 +169,7 @@ services:
       - CHROMADB_PATH=/data/chromadb
     depends_on:
       ollama:
-        condition: service_healthy
+        condition: service_started
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
