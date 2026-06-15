@@ -7,9 +7,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install CPU-only torch first so sentence-transformers doesn't pull CUDA wheels
-RUN pip install --no-cache-dir torch --extra-index-url https://download.pytorch.org/whl/cpu
-
 # Copy requirements first for layer caching
 COPY services/as1/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt

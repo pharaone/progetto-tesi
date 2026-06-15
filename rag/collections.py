@@ -29,7 +29,7 @@ ALL_COLLECTIONS = [
 ]
 
 _client: Optional[chromadb.PersistentClient] = None
-_embedding_function: Optional[embedding_functions.SentenceTransformerEmbeddingFunction] = None
+_embedding_function: Optional[embedding_functions.ONNXMiniLM_L6_V2] = None
 
 
 def _get_client() -> chromadb.PersistentClient:
@@ -43,18 +43,16 @@ def _get_client() -> chromadb.PersistentClient:
     return _client
 
 
-def _get_embedding_function() -> (
-    embedding_functions.SentenceTransformerEmbeddingFunction
-):
-    """Get or create the sentence-transformers embedding function."""
+def _get_embedding_function() -> embedding_functions.ONNXMiniLM_L6_V2:
+    """Get or create the ONNX-based all-MiniLM-L6-v2 embedding function.
+
+    Uses onnxruntime instead of torch — cross-platform, no CUDA deps,
+    same model as the sentence-transformers version.
+    """
     global _embedding_function
     if _embedding_function is None:
-        _embedding_function = (
-            embedding_functions.SentenceTransformerEmbeddingFunction(
-                model_name="all-MiniLM-L6-v2"
-            )
-        )
-        logger.info("Embedding function initialized: all-MiniLM-L6-v2")
+        _embedding_function = embedding_functions.ONNXMiniLM_L6_V2()
+        logger.info("Embedding function initialized: ONNXMiniLM_L6_V2 (all-MiniLM-L6-v2)")
     return _embedding_function
 
 
