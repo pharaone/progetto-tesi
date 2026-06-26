@@ -225,7 +225,7 @@ async def run_aiu(state: GraphState) -> Dict[str, Any]:
 
     if aga_report is None:
         logger.warning("run_aiu: no AGA report available, skipping")
-        return {}
+        return {"failed_agents": state.get("failed_agents", []) + ["AIU"]}
 
     logger.info(f"run_aiu: org_id={org_id}")
 
