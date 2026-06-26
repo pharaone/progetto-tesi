@@ -49,6 +49,7 @@ services:
       - "8001:8001"
     volumes:
       - chromadb_data:/data/chromadb
+      - onnx_cache:/root/.cache/chroma
     env_file:
       - .env
     environment:
@@ -78,6 +79,7 @@ services:
       - "8002:8002"
     volumes:
       - chromadb_data:/data/chromadb
+      - onnx_cache:/root/.cache/chroma
     env_file:
       - .env
     environment:
@@ -107,6 +109,7 @@ services:
       - "8003:8003"
     volumes:
       - chromadb_data:/data/chromadb
+      - onnx_cache:/root/.cache/chroma
     env_file:
       - .env
     environment:
@@ -136,6 +139,7 @@ services:
       - "8004:8004"
     volumes:
       - chromadb_data:/data/chromadb
+      - onnx_cache:/root/.cache/chroma
     env_file:
       - .env
     environment:
@@ -165,6 +169,7 @@ services:
       - "8005:8005"
     volumes:
       - chromadb_data:/data/chromadb
+      - onnx_cache:/root/.cache/chroma
     env_file:
       - .env
     environment:
@@ -246,4 +251,6 @@ volumes:
   ollama_data:
     driver: local
   chromadb_data:
+    driver: local
+  onnx_cache:
     driver: local
