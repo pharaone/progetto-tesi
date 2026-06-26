@@ -1,16 +1,18 @@
 """LangGraph orchestration DAG for ISO/IEC 42001 gap analysis.
 
 Graph topology:
-  START → [run_as1, run_as2, run_as3]  (parallel fan-out)
-  [run_as1, run_as2, run_as3] → run_aga  (fan-in)
-  run_aga → run_aiu
-  run_aiu → END
+  START → run_agents_parallel → run_aga → run_aiu → END
+
+AS-1, AS-2, AS-3 run concurrently inside run_agents_parallel via
+asyncio.gather — LangGraph 0.1.x does not support multiple add_edge
+calls from the same source node for fan-out.
 
 State: GraphState TypedDict
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import sys
@@ -147,6 +149,32 @@ async def run_as3(state: GraphState) -> Dict[str, Any]:
         return {"as3_output": None, "failed_agents": state.get("failed_agents", []) + ["AS-3"]}
 
 
+async def run_agents_parallel(state: GraphState) -> Dict[str, Any]:
+    """Run AS-1, AS-2, AS-3 concurrently and merge their outputs."""
+    results = await asyncio.gather(
+        run_as1(state),
+        run_as2(state),
+        run_as3(state),
+        return_exceptions=True,
+    )
+
+    merged: Dict[str, Any] = {}
+    failed_agents = list(state.get("failed_agents", []))
+
+    for result in results:
+        if isinstance(result, Exception):
+            logger.error(f"Agent raised exception: {result}", exc_info=result)
+        elif isinstance(result, dict):
+            # Collect any newly failed agents reported by the sub-calls
+            for agent in result.get("failed_agents", []):
+                if agent not in failed_agents:
+                    failed_agents.append(agent)
+            merged.update({k: v for k, v in result.items() if k != "failed_agents"})
+
+    merged["failed_agents"] = failed_agents
+    return merged
+
+
 async def run_aga(state: GraphState) -> Dict[str, Any]:
     """Call AGA service to consolidate AS-1/2/3 outputs into GapReport."""
     settings = get_settings()
@@ -236,36 +264,23 @@ def build_graph():
     Build and compile the LangGraph StateGraph.
 
     Topology:
-      START → run_as1 (parallel)
-      START → run_as2 (parallel)
-      START → run_as3 (parallel)
-      run_as1, run_as2, run_as3 → run_aga (fan-in via join_node)
-      run_aga → run_aiu
-      run_aiu → END
+      START → run_agents_parallel → run_aga → run_aiu → END
+
+    AS-1/2/3 parallelism is handled inside run_agents_parallel via
+    asyncio.gather rather than LangGraph fan-out edges (not supported
+    in langgraph 0.1.x with multiple add_edge calls from the same node).
     """
     try:
         from langgraph.graph import END, START, StateGraph
 
         graph = StateGraph(GraphState)
 
-        # Add nodes
-        graph.add_node("run_as1", run_as1)
-        graph.add_node("run_as2", run_as2)
-        graph.add_node("run_as3", run_as3)
+        graph.add_node("run_agents_parallel", run_agents_parallel)
         graph.add_node("run_aga", run_aga)
         graph.add_node("run_aiu", run_aiu)
 
-        # Fan-out: START → [AS1, AS2, AS3] in parallel
-        graph.add_edge(START, "run_as1")
-        graph.add_edge(START, "run_as2")
-        graph.add_edge(START, "run_as3")
-
-        # Fan-in: all three AS agents → AGA
-        graph.add_edge("run_as1", "run_aga")
-        graph.add_edge("run_as2", "run_aga")
-        graph.add_edge("run_as3", "run_aga")
-
-        # AGA → AIU → END
+        graph.add_edge(START, "run_agents_parallel")
+        graph.add_edge("run_agents_parallel", "run_aga")
         graph.add_edge("run_aga", "run_aiu")
         graph.add_edge("run_aiu", END)
 
