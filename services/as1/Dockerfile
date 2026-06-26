@@ -18,6 +18,9 @@ COPY rag/ /app/rag/
 # Copy service code
 COPY services/as1/main.py /app/main.py
 
+# Copy indexing scripts (used to index ISO documents into ChromaDB)
+COPY scripts/ /app/scripts/
+
 # Create data directory
 RUN mkdir -p /data/chromadb
 
