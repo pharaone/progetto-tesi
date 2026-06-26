@@ -21,8 +21,8 @@ COPY services/as1/main.py /app/main.py
 # Copy indexing scripts (used to index ISO documents into ChromaDB)
 COPY scripts/ /app/scripts/
 
-# Create data directory
-RUN mkdir -p /data/chromadb
+# Create data and iso_docs directories
+RUN mkdir -p /data/chromadb /app/iso_docs
 
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
