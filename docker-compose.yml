@@ -37,7 +37,7 @@ services:
       - ANONYMIZED_TELEMETRY=FALSE
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/heartbeat')\" 2>/dev/null || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -62,9 +62,11 @@ services:
     depends_on:
       ollama:
         condition: service_started
+      chromadb:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -89,9 +91,11 @@ services:
     depends_on:
       ollama:
         condition: service_started
+      chromadb:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -116,9 +120,11 @@ services:
     depends_on:
       ollama:
         condition: service_started
+      chromadb:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -143,9 +149,11 @@ services:
     depends_on:
       ollama:
         condition: service_started
+      chromadb:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -170,9 +178,11 @@ services:
     depends_on:
       ollama:
         condition: service_started
+      chromadb:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8005/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -212,7 +222,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
