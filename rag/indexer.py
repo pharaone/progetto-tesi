@@ -70,32 +70,44 @@ def _get_splitter() -> RecursiveCharacterTextSplitter:
 
 
 def _extract_text_from_pdf(file_path: str) -> str:
-    """Extract text from a PDF file."""
+    """Extract text from a PDF file, tolerating minor corruption."""
+    import pypdf
+
+    text_parts = []
+
+    # First attempt: lenient mode (handles missing EOF markers, truncated xref)
     try:
-        import pypdf
-
-        text_parts = []
         with open(file_path, "rb") as f:
-            reader = pypdf.PdfReader(f)
+            reader = pypdf.PdfReader(f, strict=False)
             for page in reader.pages:
-                text = page.extract_text()
-                if text:
-                    text_parts.append(text)
-        return "\n\n".join(text_parts)
-    except ImportError:
-        # Fallback: try pdfminer
-        try:
-            from pdfminer.high_level import extract_text as pdfminer_extract
+                try:
+                    text = page.extract_text()
+                    if text:
+                        text_parts.append(text)
+                except Exception as page_exc:
+                    logger.warning(f"Skipping page in {file_path}: {page_exc}")
+        if text_parts:
+            return "\n\n".join(text_parts)
+        logger.warning(f"pypdf extracted no text from {file_path}")
+    except Exception as exc:
+        logger.warning(f"pypdf failed on {file_path}: {exc}, trying pdfminer fallback")
 
-            return pdfminer_extract(file_path)
-        except ImportError:
-            logger.error(
-                "Neither pypdf nor pdfminer.six is installed. Cannot extract PDF text."
-            )
-            raise RuntimeError(
-                "PDF extraction requires pypdf or pdfminer.six. "
-                "Install with: pip install pypdf"
-            )
+    # Second attempt: pdfminer (more robust for complex/scanned PDFs)
+    try:
+        from pdfminer.high_level import extract_text as pdfminer_extract
+        text = pdfminer_extract(file_path)
+        if text and text.strip():
+            return text
+        logger.warning(f"pdfminer also extracted no text from {file_path}")
+    except ImportError:
+        logger.debug("pdfminer.six not installed, skipping fallback")
+    except Exception as exc:
+        logger.warning(f"pdfminer failed on {file_path}: {exc}")
+
+    raise RuntimeError(
+        f"Could not extract text from {file_path}. "
+        "The PDF may be encrypted, scanned-only, or severely corrupted."
+    )
 
 
 def _extract_text(file_path: str) -> str:
