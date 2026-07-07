@@ -156,6 +156,28 @@ def query(
     return results
 
 
+def query_iso_with_fallback(
+    partition_collection: str,
+    query_text: str,
+    n_results: int = 5,
+) -> Dict:
+    """Query an ISO partition collection, falling back to ISO-FULL when it is empty.
+
+    When the full ISO was indexed as a single file (into ISO-FULL only), the
+    partition collections are empty. This helper transparently retries against
+    ISO-FULL so callers always get semantic search results.
+    """
+    result = query(partition_collection, query_text, n_results)
+    docs = result.get("documents", [[]])[0]
+    if not docs and partition_collection != COLLECTION_ISO_FULL:
+        logger.info(
+            f"'{partition_collection}' returned no results, "
+            f"falling back to '{COLLECTION_ISO_FULL}'"
+        )
+        result = query(COLLECTION_ISO_FULL, query_text, n_results)
+    return result
+
+
 def delete_documents_by_prefix(collection_name: str, id_prefix: str) -> int:
     """Delete all documents whose ID starts with the given prefix."""
     collection = get_collection(collection_name)

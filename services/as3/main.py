@@ -40,6 +40,7 @@ from rag.collections import (
     COLLECTION_ISO_CL910_A710,
     COLLECTION_ORG_DOCS,
     query as rag_query,
+    query_iso_with_fallback,
 )
 from rag.requirements_loader import load_requirements_from_rag
 
@@ -286,8 +287,9 @@ def _retrieve_context(query_text: str, org_id: str) -> tuple[str, str, List[Evid
         logger.warning(f"ORG-DOCS query failed: {exc}")
         org_results = {"ids": [[]], "documents": [[]], "metadatas": [[]], "distances": [[]]}
 
+    # Query ISO-CL910-A710 (falls back to ISO-FULL when partition is empty)
     try:
-        iso_results = rag_query(COLLECTION_ISO_CL910_A710, query_text, n_results=3)
+        iso_results = query_iso_with_fallback(COLLECTION_ISO_CL910_A710, query_text, n_results=3)
     except Exception as exc:
         logger.warning(f"ISO-CL910-A710 query failed: {exc}")
         iso_results = {"ids": [[]], "documents": [[]], "metadatas": [[]], "distances": [[]]}

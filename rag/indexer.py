@@ -30,9 +30,11 @@ logger = logging.getLogger(__name__)
 CHUNK_SIZE = 512
 CHUNK_OVERLAP = 64
 
-# Regex patterns for ISO clause/control headings (matched at start of a line)
-_ANNEX_HEADING = re.compile(r"^A\.(\d+)\.(\d+)(?:\.(\d+))?(?=\s|$)", re.MULTILINE)
-_CLAUSE_HEADING = re.compile(r"^(\d{1,2})\.(\d+)(?:\.(\d+))?(?=\s|$)", re.MULTILINE)
+# Regex patterns for ISO clause/control headings.
+# Allow optional leading whitespace (tabs/spaces) because PDF-extracted text
+# often indents headings slightly while still placing them at the start of a line.
+_ANNEX_HEADING = re.compile(r"^[ \t]*A\.(\d+)\.(\d+)(?:\.(\d+))?(?=\s|$)", re.MULTILINE)
+_CLAUSE_HEADING = re.compile(r"^[ \t]*(\d{1,2})\.(\d+)(?:\.(\d+))?(?=\s|$)", re.MULTILINE)
 
 
 def _extract_requirement_id(text: str) -> str:
