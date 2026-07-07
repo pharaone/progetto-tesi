@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Dict, List, Optional
 
-from rag.collections import get_collection
+from rag.collections import COLLECTION_ISO_FULL, get_collection
 
 logger = logging.getLogger(__name__)
 
@@ -22,9 +22,10 @@ def load_requirements_from_rag(
     """
     Load ISO requirements from a ChromaDB collection.
 
-    Each requirement is reconstructed by grouping all chunks that share
-    the same requirement_id metadata field. Chunks are sorted by
-    chunk_index and concatenated to form the complete requirement text.
+    Tries the requested partition collection first. If it is empty
+    (e.g. the ISO was indexed as a single file into ISO-FULL rather
+    than into partitioned collections), falls back to ISO-FULL with
+    the same section prefix filter applied.
 
     Args:
         collection_name: ChromaDB collection to query (e.g., "ISO-CL456").
@@ -33,13 +34,33 @@ def load_requirements_from_rag(
 
     Returns:
         Sorted list of {"id": requirement_id, "text": requirement_text}.
-        Returns empty list if the collection has no indexed requirements —
-        callers should treat this as a 503 condition.
+        Returns empty list only when both the partition and ISO-FULL
+        contain no tagged requirement chunks.
     """
+    requirements = _load_from_collection(collection_name, section_prefixes)
+    if requirements:
+        return requirements
+
+    # Partition collection empty — fall back to the full collection
+    if collection_name != COLLECTION_ISO_FULL:
+        logger.info(
+            f"'{collection_name}' has no tagged requirements, "
+            f"falling back to '{COLLECTION_ISO_FULL}'"
+        )
+        requirements = _load_from_collection(COLLECTION_ISO_FULL, section_prefixes)
+
+    return requirements
+
+
+def _load_from_collection(
+    collection_name: str,
+    section_prefixes: Optional[List[str]],
+) -> List[Dict[str, str]]:
+    """Query one collection and return grouped requirements."""
     try:
         collection = get_collection(collection_name)
         if collection.count() == 0:
-            logger.warning(f"Collection '{collection_name}' is empty — ISO not yet indexed")
+            logger.warning(f"Collection '{collection_name}' is empty")
             return []
 
         results = collection.get(
@@ -57,10 +78,8 @@ def load_requirements_from_rag(
     metas = results.get("metadatas") or []
 
     if not docs:
-        logger.warning(f"No requirement chunks found in '{collection_name}'")
         return []
 
-    # Group chunks by requirement_id, applying prefix filter
     grouped: Dict[str, List[tuple[int, str]]] = {}
     for doc, meta in zip(docs, metas):
         if not meta:
@@ -74,12 +93,8 @@ def load_requirements_from_rag(
         grouped.setdefault(req_id, []).append((chunk_index, doc or ""))
 
     if not grouped:
-        logger.warning(
-            f"No matching requirements in '{collection_name}' for prefixes={section_prefixes}"
-        )
         return []
 
-    # Sort chunks within each requirement and join text
     requirements = []
     for req_id, chunks in grouped.items():
         chunks.sort(key=lambda x: x[0])
