@@ -156,6 +156,22 @@ def query(
     return results
 
 
+def reset_collection(name: str) -> None:
+    """Delete and recreate a collection, removing all its documents."""
+    if name not in ALL_COLLECTIONS:
+        raise ValueError(
+            f"Unknown collection '{name}'. Valid collections: {ALL_COLLECTIONS}"
+        )
+    client = _get_client()
+    try:
+        client.delete_collection(name)
+        logger.info(f"Deleted collection '{name}'")
+    except Exception:
+        # Collection didn't exist yet — nothing to delete
+        pass
+    get_collection(name)
+
+
 def query_iso_with_fallback(
     partition_collection: str,
     query_text: str,

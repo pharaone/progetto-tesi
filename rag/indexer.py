@@ -36,6 +36,18 @@ CHUNK_OVERLAP = 64
 _ANNEX_HEADING = re.compile(r"^[ \t]*A\.(\d+)\.(\d+)(?:\.(\d+))?(?=\s|$)", re.MULTILINE)
 _CLAUSE_HEADING = re.compile(r"^[ \t]*(\d{1,2})\.(\d+)(?:\.(\d+))?(?=\s|$)", re.MULTILINE)
 
+# Table-of-contents lines use long dot leaders ("5.1 Leadership.......... 42").
+# They match the heading regexes and would tag TOC chunks with requirement_ids,
+# polluting requirement text with TOC junk — strip them before chunking.
+_TOC_LINE = re.compile(r"^.*\.{5,}.*$", re.MULTILINE)
+
+
+def _strip_toc_lines(text: str) -> str:
+    """Remove table-of-contents lines (long dot leaders) from extracted text."""
+    stripped = _TOC_LINE.sub("", text)
+    # Collapse the blank gaps left behind
+    return re.sub(r"\n{3,}", "\n\n", stripped)
+
 
 def _extract_requirement_id(text: str) -> str:
     """Extract the primary ISO requirement ID from a text chunk.
@@ -178,6 +190,8 @@ def index_iso_document(file_path: str, collection_name: str) -> int:
     if not text.strip():
         logger.warning(f"No text extracted from {file_path}")
         return 0
+
+    text = _strip_toc_lines(text)
 
     chunks, metadatas = _chunk_text(
         text, file_path, extra_metadata={"collection": collection_name, "type": "iso"}

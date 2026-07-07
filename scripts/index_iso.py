@@ -34,8 +34,16 @@ from rag.collections import (
     COLLECTION_ISO_CL910_A710,
     COLLECTION_ISO_FULL,
     initialize_collections,
+    reset_collection,
 )
 from rag.indexer import index_iso_document
+
+ISO_COLLECTIONS = [
+    COLLECTION_ISO_CL456,
+    COLLECTION_ISO_CL78_A26,
+    COLLECTION_ISO_CL910_A710,
+    COLLECTION_ISO_FULL,
+]
 
 logging.basicConfig(
     level=logging.INFO,
@@ -79,7 +87,7 @@ def _determine_collections(filename: str) -> list[str]:
     return list(collections)
 
 
-def index_directory(docs_dir: str, dry_run: bool = False) -> dict:
+def index_directory(docs_dir: str, dry_run: bool = False, reset: bool = False) -> dict:
     """
     Index all ISO documents in the given directory.
 
@@ -111,6 +119,10 @@ def index_directory(docs_dir: str, dry_run: bool = False) -> dict:
     if not dry_run:
         logger.info("Initializing ChromaDB collections...")
         initialize_collections()
+        if reset:
+            for name in ISO_COLLECTIONS:
+                logger.info(f"Resetting collection '{name}'...")
+                reset_collection(name)
 
     summary: dict[str, int] = {
         COLLECTION_ISO_CL456: 0,
@@ -165,6 +177,11 @@ def main() -> None:
         help="Show what would be indexed without actually indexing",
     )
     parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="Wipe the ISO collections before indexing (removes stale chunks)",
+    )
+    parser.add_argument(
         "--chromadb-path",
         default=None,
         help="Override CHROMADB_PATH environment variable",
@@ -182,7 +199,7 @@ def main() -> None:
         logger.info("DRY RUN MODE — no documents will be indexed")
 
     try:
-        summary = index_directory(args.docs_dir, dry_run=args.dry_run)
+        summary = index_directory(args.docs_dir, dry_run=args.dry_run, reset=args.reset)
 
         if not args.dry_run:
             print("\nIndexing Summary:")
