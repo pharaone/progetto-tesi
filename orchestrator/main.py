@@ -335,6 +335,92 @@ async def review_report(
 
 
 # ---------------------------------------------------------------------------
+# Clarifications
+# ---------------------------------------------------------------------------
+
+class ClarificationRequest(BaseModel):
+    requirement_id: str = Field(..., description="Requirement the clarification refers to")
+    text: str = Field(..., min_length=10, description="Explanation / additional detail")
+
+
+@app.post("/reports/{report_id}/clarifications")
+async def add_clarification(
+    report_id: int,
+    request: ClarificationRequest,
+    user: Dict[str, Any] = Depends(get_current_user),
+) -> dict:
+    """
+    Attach an explanation to a NON_CONFORME / PARZIALMENTE_CONFORME requirement.
+
+    The clarification is stored as a company document (owned by the author)
+    and indexed into the RAG, so the NEXT analysis run takes it into account
+    as organizational evidence.
+    """
+    settings = get_settings()
+
+    report = db.get_report(report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="Report not found")
+    if user["role"] != ROLE_CERTIFIER and report["status"] != db.STATUS_APPROVED:
+        raise HTTPException(
+            status_code=403,
+            detail="This report has not been approved by the certifier yet",
+        )
+
+    cards = report["report"].get("evaluation_cards", [])
+    card = next(
+        (c for c in cards if c.get("requirement_id") == request.requirement_id), None
+    )
+    if card is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Requirement '{request.requirement_id}' not found in report {report_id}",
+        )
+    if card.get("verdict") not in ("NON_CONFORME", "PARZIALMENTE_CONFORME"):
+        raise HTTPException(
+            status_code=400,
+            detail="Clarifications can only be added to NON_CONFORME or "
+                   "PARZIALMENTE_CONFORME requirements",
+        )
+
+    # Build a self-contained document: requirement context + the user's
+    # explanation, so semantic retrieval matches it in the next analysis.
+    gaps = card.get("gaps", [])
+    gaps_section = "\n".join(f"- {g}" for g in gaps) if gaps else "-"
+    content = (
+        f"Chiarimento / documentazione integrativa per il requisito "
+        f"ISO/IEC 42001 {request.requirement_id}\n"
+        f"Fornito da: {user['username']} (in risposta al report #{report_id}, "
+        f"verdetto: {card.get('verdict')})\n\n"
+        f"Requisito: {card.get('requirement_text', '')[:500]}\n\n"
+        f"Gap identificati nell'analisi:\n{gaps_section}\n\n"
+        f"Spiegazione dell'organizzazione:\n{request.text.strip()}\n"
+    )
+
+    filename = f"chiarimento_{request.requirement_id}_report{report_id}_{user['username']}.txt"
+    doc_id = db.add_document(filename, user["username"], content)
+
+    from rag.indexer import index_text_as_org_doc
+    try:
+        index_text_as_org_doc(content, filename, settings.ORG_ID)
+    except Exception as exc:
+        logger.warning(f"Failed to index clarification {filename}: {exc}")
+
+    logger.info(
+        f"Clarification added: report={report_id}, requirement={request.requirement_id}, "
+        f"by={user['username']}, doc_id={doc_id}"
+    )
+    return {
+        "document_id": doc_id,
+        "filename": filename,
+        "message": (
+            "Chiarimento salvato tra i documenti aziendali. "
+            "Sarà considerato alla prossima analisi."
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Chat
 # ---------------------------------------------------------------------------
 

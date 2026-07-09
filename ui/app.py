@@ -177,8 +177,18 @@ def render_login_page() -> None:
 # Report dashboard rendering (shared by employee and certifier views)
 # ---------------------------------------------------------------------------
 
-def render_report_dashboard(report: Dict[str, Any]) -> None:
-    """Render the compliance dashboard for a gap report (the inner report JSON)."""
+def render_report_dashboard(
+    report: Dict[str, Any],
+    report_id: Optional[int] = None,
+    allow_clarifications: bool = False,
+) -> None:
+    """Render the compliance dashboard for a gap report (the inner report JSON).
+
+    When allow_clarifications is True (employee view on approved reports),
+    NON_CONFORME / PARZIALMENTE_CONFORME cards get a form to submit an
+    explanation, which is saved among the company documents and used by
+    the next analysis.
+    """
     exec_summary = report.get("execution_metadata", {}).get("executive_summary", "")
     if exec_summary:
         st.info(exec_summary)
@@ -308,6 +318,30 @@ def render_report_dashboard(report: Dict[str, Any]) -> None:
                                 f"  *{ev.get('excerpt', '')[:200]}*"
                             )
 
+                    if (
+                        allow_clarifications
+                        and report_id is not None
+                        and verdict in ("NON_CONFORME", "PARZIALMENTE_CONFORME")
+                    ):
+                        with st.form(key=f"clar_form_{report_id}_{req_id}"):
+                            clar_text = st.text_area(
+                                "Aggiungi un chiarimento (es. pratiche esistenti non documentate, "
+                                "contesto mancante, riferimenti a procedure interne)",
+                                key=f"clar_text_{report_id}_{req_id}",
+                                height=100,
+                            )
+                            submitted = st.form_submit_button("💬 Invia chiarimento")
+                        if submitted:
+                            if len(clar_text.strip()) < 10:
+                                st.warning("Il chiarimento deve contenere almeno 10 caratteri.")
+                            else:
+                                result = api_post(
+                                    f"/reports/{report_id}/clarifications",
+                                    json={"requirement_id": req_id, "text": clar_text.strip()},
+                                )
+                                if result:
+                                    st.success(result.get("message", "Chiarimento salvato."))
+
                     st.divider()
 
 
@@ -356,6 +390,7 @@ def render_report_list_and_detail(
     key_prefix: str,
     show_chat: bool = True,
     review_controls: bool = False,
+    allow_clarifications: bool = False,
 ) -> None:
     """Shared report browser: selectbox → dashboard (+ optional chat / review)."""
     if not reports:
@@ -409,7 +444,11 @@ def render_report_list_and_detail(
                     st.rerun()
 
     st.divider()
-    render_report_dashboard(detail["report"])
+    render_report_dashboard(
+        detail["report"],
+        report_id=report_id,
+        allow_clarifications=allow_clarifications and detail["status"] == "APPROVED",
+    )
 
     if show_chat:
         st.divider()
@@ -511,9 +550,16 @@ def render_employee_view() -> None:
 
     with tab_reports:
         st.subheader("Report approvati dal certificatore")
+        st.caption(
+            "Per i requisiti NON CONFORME o PARZIALMENTE CONFORME puoi aggiungere "
+            "un chiarimento: verrà salvato tra i documenti aziendali e considerato "
+            "alla prossima analisi."
+        )
         reports = api_get("/reports")
         if reports is not None:
-            render_report_list_and_detail(reports, key_prefix="emp", show_chat=True)
+            render_report_list_and_detail(
+                reports, key_prefix="emp", show_chat=True, allow_clarifications=True
+            )
 
 
 # ---------------------------------------------------------------------------
