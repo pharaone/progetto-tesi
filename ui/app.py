@@ -1,10 +1,11 @@
 """Streamlit UI for ISO/IEC 42001 Gap Analysis System.
 
-Features:
-- Sidebar: org_id input + multi-file document upload
-- "Avvia Analisi" button triggers full pipeline
-- Dashboard: compliance score, verdict counts, prioritized gaps table, expandable evaluation cards
-- Chat interface with AIU for interactive Q&A
+Single-company deployment with two authenticated roles:
+
+- Employee:  uploads documents (sees only their own), starts the analysis,
+             views APPROVED reports, chats with the AIU consultant.
+- Certifier: reviews pending gap reports and approves/rejects them before
+             they become visible to employees.
 """
 
 from __future__ import annotations
@@ -17,321 +18,250 @@ import pandas as pd
 import streamlit as st
 
 ORCHESTRATOR_URL = os.getenv("ORCHESTRATOR_URL", "http://localhost:8000")
-AIU_URL = os.getenv("AIU_URL", "http://localhost:8005")
 
 st.set_page_config(
     page_title="ISO/IEC 42001 Gap Analysis",
-    page_icon="",
+    page_icon="✅",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 # ---------------------------------------------------------------------------
-# Sidebar
+# Session state
 # ---------------------------------------------------------------------------
 
-with st.sidebar:
-    st.title("ISO/IEC 42001")
-    st.subheader("Gap Analysis System")
-    st.divider()
+for key, default in [
+    ("token", None),
+    ("username", None),
+    ("role", None),
+    ("chat_histories", {}),  # report_id -> list of messages
+    ("analysis_notice", None),
+]:
+    if key not in st.session_state:
+        st.session_state[key] = default
 
-    org_id = st.text_input(
-        "Organization ID",
-        placeholder="e.g. acme-corp-2024",
-        help="Unique identifier for your organization",
-    )
-
-    uploaded_files = st.file_uploader(
-        "Upload Organizational Documents",
-        accept_multiple_files=True,
-        type=["txt", "pdf", "md"],
-        help="Upload policies, procedures, risk assessments, and other relevant documents (PDF or TXT)",
-    )
-
-    st.divider()
-    st.caption("ISO/IEC 42001:2023 AI Management System")
-    st.caption("Coverage: Clauses 4-10 + Annex A")
-
-    if uploaded_files:
-        st.success(f"{len(uploaded_files)} file(s) ready")
-        for f in uploaded_files:
-            st.caption(f"• {f.name}")
 
 # ---------------------------------------------------------------------------
-# Main area
+# API helpers
 # ---------------------------------------------------------------------------
 
-st.title("ISO/IEC 42001 Compliance Gap Analysis")
-
-# Initialize session state
-if "gap_report" not in st.session_state:
-    st.session_state.gap_report = None
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-if "analysis_running" not in st.session_state:
-    st.session_state.analysis_running = False
+def _auth_headers() -> Dict[str, str]:
+    return {"Authorization": f"Bearer {st.session_state.token}"}
 
 
-def _verdict_color(verdict: str) -> str:
-    colors = {
-        "CONFORME": "green",
-        "NON_CONFORME": "red",
-        "PARZIALMENTE_CONFORME": "orange",
-        "NON_APPLICABILE": "gray",
-    }
-    return colors.get(verdict, "blue")
-
-
-def _verdict_badge(verdict: str) -> str:
-    colors = {
-        "CONFORME": "normal",
-        "NON_CONFORME": "off",
-        "PARZIALMENTE_CONFORME": "inverse",
-        "NON_APPLICABILE": "off",
-    }
-    return verdict.replace("_", " ")
-
-
-def run_analysis(org_id: str, files) -> Optional[Dict[str, Any]]:
-    """Call orchestrator /analyze endpoint with multipart form."""
+def api_post(path: str, json: Optional[dict] = None, timeout: float = 60.0, **kwargs) -> Optional[dict]:
     try:
-        file_tuples = []
-        for f in files:
-            file_content = f.read()
-            file_tuples.append(("files", (f.name, file_content, "application/octet-stream")))
-
-        with httpx.Client(timeout=600.0) as client:
-            response = client.post(
-                f"{ORCHESTRATOR_URL}/analyze",
-                data={"org_id": org_id},
-                files=file_tuples,
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.post(
+                f"{ORCHESTRATOR_URL}{path}",
+                json=json,
+                headers=_auth_headers() if st.session_state.token else {},
+                **kwargs,
             )
-            response.raise_for_status()
-            return response.json()
+            resp.raise_for_status()
+            return resp.json()
     except httpx.TimeoutException:
-        st.error("Analysis timed out. The pipeline may still be running. Please try again later.")
-        return None
+        st.error("Richiesta scaduta (timeout). Riprova più tardi.")
     except httpx.HTTPStatusError as exc:
-        st.error(f"Analysis failed (HTTP {exc.response.status_code}): {exc.response.text}")
-        return None
+        _show_http_error(exc)
     except Exception as exc:
-        st.error(f"Analysis error: {str(exc)}")
-        return None
+        st.error(f"Errore: {exc}")
+    return None
 
 
-def send_chat_message(
-    org_id: str,
-    message: str,
-    gap_report: Dict,
-    chat_history: List,
-) -> Optional[Dict[str, Any]]:
-    """Send a chat message to the AIU service."""
+def api_get(path: str, timeout: float = 30.0) -> Optional[Any]:
     try:
-        payload = {
-            "org_id": org_id,
-            "message": message,
-            "gap_report": gap_report,
-            "chat_history": chat_history,
-        }
-        with httpx.Client(timeout=120.0) as client:
-            response = client.post(f"{AIU_URL}/chat", json=payload)
-            response.raise_for_status()
-            return response.json()
-    except httpx.TimeoutException:
-        st.error("Chat response timed out. Please try again.")
-        return None
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.get(f"{ORCHESTRATOR_URL}{path}", headers=_auth_headers())
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as exc:
+        _show_http_error(exc)
     except Exception as exc:
-        st.error(f"Chat error: {str(exc)}")
-        return None
+        st.error(f"Errore: {exc}")
+    return None
+
+
+def api_delete(path: str, timeout: float = 30.0) -> Optional[dict]:
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.delete(f"{ORCHESTRATOR_URL}{path}", headers=_auth_headers())
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as exc:
+        _show_http_error(exc)
+    except Exception as exc:
+        st.error(f"Errore: {exc}")
+    return None
+
+
+def _show_http_error(exc: httpx.HTTPStatusError) -> None:
+    if exc.response.status_code == 401:
+        st.session_state.token = None
+        st.session_state.username = None
+        st.session_state.role = None
+        st.error("Sessione scaduta. Effettua di nuovo il login.")
+    else:
+        try:
+            detail = exc.response.json().get("detail", exc.response.text)
+        except Exception:
+            detail = exc.response.text
+        st.error(f"Errore (HTTP {exc.response.status_code}): {detail}")
+
+
+def logout() -> None:
+    st.session_state.token = None
+    st.session_state.username = None
+    st.session_state.role = None
+    st.session_state.chat_histories = {}
+    st.session_state.analysis_notice = None
 
 
 # ---------------------------------------------------------------------------
-# Analysis trigger
+# Login page
 # ---------------------------------------------------------------------------
 
-col_btn, col_status = st.columns([1, 3])
+def render_login_page() -> None:
+    st.title("ISO/IEC 42001 Compliance Gap Analysis")
+    st.caption("Accedi per continuare")
 
-with col_btn:
-    start_btn = st.button(
-        "Avvia Analisi",
-        type="primary",
-        disabled=not (org_id and uploaded_files),
-        use_container_width=True,
-    )
+    tab_login, tab_register = st.tabs(["Accedi", "Registrati (dipendente)"])
 
-with col_status:
-    if not org_id:
-        st.info("Enter an Organization ID in the sidebar to begin.")
-    elif not uploaded_files:
-        st.info("Upload at least one document in the sidebar.")
-    elif st.session_state.gap_report:
-        score = st.session_state.gap_report.get("overall_compliance_score", 0)
-        st.success(f"Last analysis completed. Score: {score:.1f}/100")
+    with tab_login:
+        with st.form("login_form"):
+            username = st.text_input("Username", key="login_username")
+            password = st.text_input("Password", type="password", key="login_password")
+            submitted = st.form_submit_button("Accedi", type="primary", use_container_width=True)
 
-if start_btn and org_id and uploaded_files:
-    with st.spinner("Running ISO 42001 gap analysis... This may take several minutes."):
-        # Reset file pointers (Streamlit may have already read them)
-        for f in uploaded_files:
-            f.seek(0)
+        if submitted:
+            if not username or not password:
+                st.warning("Inserisci username e password.")
+            else:
+                result = api_post("/auth/login", json={"username": username, "password": password})
+                if result:
+                    st.session_state.token = result["token"]
+                    st.session_state.username = result["username"]
+                    st.session_state.role = result["role"]
+                    st.rerun()
 
-        report = run_analysis(org_id, uploaded_files)
-        if report:
-            st.session_state.gap_report = report
-            st.session_state.chat_history = []
-            st.success("Analysis completed successfully!")
-            st.rerun()
+    with tab_register:
+        st.caption("La registrazione crea un account **dipendente**. L'account del certificatore è configurato dall'amministratore.")
+        with st.form("register_form"):
+            new_username = st.text_input("Username", key="reg_username")
+            new_password = st.text_input("Password (min 6 caratteri)", type="password", key="reg_password")
+            new_password2 = st.text_input("Conferma password", type="password", key="reg_password2")
+            reg_submitted = st.form_submit_button("Registrati", use_container_width=True)
+
+        if reg_submitted:
+            if not new_username or not new_password:
+                st.warning("Inserisci username e password.")
+            elif new_password != new_password2:
+                st.warning("Le password non coincidono.")
+            elif len(new_password) < 6:
+                st.warning("La password deve avere almeno 6 caratteri.")
+            else:
+                result = api_post("/auth/register", json={"username": new_username, "password": new_password})
+                if result:
+                    st.session_state.token = result["token"]
+                    st.session_state.username = result["username"]
+                    st.session_state.role = result["role"]
+                    st.success("Registrazione completata!")
+                    st.rerun()
+
 
 # ---------------------------------------------------------------------------
-# Dashboard
+# Report dashboard rendering (shared by employee and certifier views)
 # ---------------------------------------------------------------------------
 
-if st.session_state.gap_report:
-    report = st.session_state.gap_report
-    st.divider()
-    st.header("Compliance Dashboard")
-
-    # Executive summary (if available)
+def render_report_dashboard(report: Dict[str, Any]) -> None:
+    """Render the compliance dashboard for a gap report (the inner report JSON)."""
     exec_summary = report.get("execution_metadata", {}).get("executive_summary", "")
     if exec_summary:
         st.info(exec_summary)
 
-    # Partial coverage warning
     if report.get("partial_coverage"):
         failed = ", ".join(report.get("failed_agents", []))
-        st.warning(f"Partial coverage — the following agents failed: {failed}. Results are incomplete.")
+        st.warning(f"Copertura parziale — agenti falliti: {failed}. Risultati incompleti.")
 
-    # Compliance score
-    st.subheader("Overall Compliance Score")
+    st.subheader("Punteggio di conformità")
     score = report.get("overall_compliance_score", 0.0)
     counts = report.get("counts", {})
 
     col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Compliance Score", f"{score:.1f}/100")
-    col2.metric("Conforme", counts.get("compliant", 0), delta=None)
-    col3.metric(
-        "Non Conforme",
-        counts.get("non_compliant", 0),
-        delta=None,
-        delta_color="inverse",
-    )
-    col4.metric("Parzialmente", counts.get("partial", 0), delta=None)
+    col2.metric("Conforme", counts.get("compliant", 0))
+    col3.metric("Non Conforme", counts.get("non_compliant", 0))
+    col4.metric("Parzialmente", counts.get("partial", 0))
     col5.metric("Non Applicabile", counts.get("not_applicable", 0))
 
-    # Progress bar for score
-    st.progress(score / 100.0, text=f"Compliance: {score:.1f}%")
-
+    st.progress(min(score / 100.0, 1.0), text=f"Compliance: {score:.1f}%")
     st.divider()
 
-    # Prioritized gaps table
     prioritized_gaps = report.get("prioritized_gaps", [])
     if prioritized_gaps:
-        st.subheader(f"Prioritized Gaps ({len(prioritized_gaps)} total)")
+        st.subheader(f"Gap prioritizzati ({len(prioritized_gaps)} totali)")
 
         gaps_data = []
         for gap in prioritized_gaps:
             verdict = gap.get("verdict", "")
             gaps_text = "; ".join(gap.get("gaps", [])[:2]) if gap.get("gaps") else "—"
             ca = gap.get("corrective_action", {})
-            action = ca.get("description", "—")[:100] + "..." if len(ca.get("description", "")) > 100 else ca.get("description", "—")
-            doc_type = ca.get("expected_document_type", "—")
-
-            severity_label = "CRITICO" if gap.get("severity") == 1 else "MODERATO"
-
+            action = ca.get("description", "—")
+            if len(action) > 100:
+                action = action[:100] + "..."
             gaps_data.append({
                 "Priorità": gap.get("severity", 0),
-                "Severità": severity_label,
+                "Severità": "CRITICO" if gap.get("severity") == 1 else "MODERATO",
                 "Requisito": gap.get("requirement_id", ""),
                 "Verdict": verdict.replace("_", " "),
                 "Gap Identificati": gaps_text,
                 "Azione Correttiva": action,
-                "Documento Atteso": doc_type,
+                "Documento Atteso": ca.get("expected_document_type", "—"),
             })
 
-        df = pd.DataFrame(gaps_data)
-        st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Priorità": st.column_config.NumberColumn(width="small"),
-                "Severità": st.column_config.TextColumn(width="small"),
-                "Requisito": st.column_config.TextColumn(width="small"),
-                "Verdict": st.column_config.TextColumn(width="medium"),
-                "Gap Identificati": st.column_config.TextColumn(width="large"),
-                "Azione Correttiva": st.column_config.TextColumn(width="large"),
-                "Documento Atteso": st.column_config.TextColumn(width="medium"),
-            },
-        )
+        st.dataframe(pd.DataFrame(gaps_data), use_container_width=True, hide_index=True)
     else:
-        st.success("No compliance gaps identified!")
+        st.success("Nessun gap di conformità identificato!")
 
     st.divider()
 
-    # Evaluation cards by clause
     all_cards = report.get("evaluation_cards", [])
     if all_cards:
-        st.subheader("Evaluation Cards by Clause Group")
+        st.subheader("Schede di valutazione per gruppo di clausole")
 
-        # Group cards by clause prefix
-        groups: Dict[str, List] = {
-            "Clause 4 (Context)": [],
-            "Clause 5 (Leadership)": [],
-            "Clause 6 (Planning)": [],
-            "Clause 7 (Support)": [],
-            "Clause 8 (Operations)": [],
-            "Clause 9 (Performance)": [],
-            "Clause 10 (Improvement)": [],
-            "Annex A.2": [],
-            "Annex A.3": [],
-            "Annex A.4": [],
-            "Annex A.5": [],
-            "Annex A.6": [],
-            "Annex A.7": [],
-            "Annex A.8": [],
-            "Annex A.9": [],
-            "Annex A.10": [],
-        }
+        group_order = [
+            ("cl-4", "Clause 4 (Context)"),
+            ("cl-5", "Clause 5 (Leadership)"),
+            ("cl-6", "Clause 6 (Planning)"),
+            ("cl-7", "Clause 7 (Support)"),
+            ("cl-8", "Clause 8 (Operations)"),
+            ("cl-9", "Clause 9 (Performance)"),
+            ("cl-10", "Clause 10 (Improvement)"),
+            ("A.2", "Annex A.2"),
+            ("A.3", "Annex A.3"),
+            ("A.4", "Annex A.4"),
+            ("A.5", "Annex A.5"),
+            ("A.6", "Annex A.6"),
+            ("A.7", "Annex A.7"),
+            ("A.8", "Annex A.8"),
+            ("A.9", "Annex A.9"),
+            ("A.10", "Annex A.10"),
+        ]
 
+        groups: Dict[str, List] = {label: [] for _, label in group_order}
         for card in all_cards:
             req_id = card.get("requirement_id", "")
-            if req_id.startswith("cl-4"):
-                groups["Clause 4 (Context)"].append(card)
-            elif req_id.startswith("cl-5"):
-                groups["Clause 5 (Leadership)"].append(card)
-            elif req_id.startswith("cl-6"):
-                groups["Clause 6 (Planning)"].append(card)
-            elif req_id.startswith("cl-7"):
-                groups["Clause 7 (Support)"].append(card)
-            elif req_id.startswith("cl-8"):
-                groups["Clause 8 (Operations)"].append(card)
-            elif req_id.startswith("cl-9"):
-                groups["Clause 9 (Performance)"].append(card)
-            elif req_id.startswith("cl-10"):
-                groups["Clause 10 (Improvement)"].append(card)
-            elif req_id.startswith("A.2"):
-                groups["Annex A.2"].append(card)
-            elif req_id.startswith("A.3"):
-                groups["Annex A.3"].append(card)
-            elif req_id.startswith("A.4"):
-                groups["Annex A.4"].append(card)
-            elif req_id.startswith("A.5"):
-                groups["Annex A.5"].append(card)
-            elif req_id.startswith("A.6"):
-                groups["Annex A.6"].append(card)
-            elif req_id.startswith("A.7"):
-                groups["Annex A.7"].append(card)
-            elif req_id.startswith("A.8"):
-                groups["Annex A.8"].append(card)
-            elif req_id.startswith("A.9"):
-                groups["Annex A.9"].append(card)
-            elif req_id.startswith("A.10"):
-                groups["Annex A.10"].append(card)
+            # Longest prefix first so cl-10 isn't captured by cl-1
+            for prefix, label in sorted(group_order, key=lambda x: -len(x[0])):
+                if req_id.startswith(prefix):
+                    groups[label].append(card)
+                    break
 
-        for group_name, cards in groups.items():
+        for _, group_name in group_order:
+            cards = groups[group_name]
             if not cards:
                 continue
 
-            # Compute group summary
             group_conforme = sum(1 for c in cards if c.get("verdict") == "CONFORME")
             group_non_conf = sum(1 for c in cards if c.get("verdict") == "NON_CONFORME")
             group_partial = sum(1 for c in cards if c.get("verdict") == "PARZIALMENTE_CONFORME")
@@ -347,16 +277,7 @@ if st.session_state.gap_report:
                     ca = card.get("corrective_action", {})
                     evidences = card.get("evidences", [])
 
-                    # Verdict badge
-                    verdict_display = verdict.replace("_", " ")
-                    badge_type = {
-                        "CONFORME": "success",
-                        "NON_CONFORME": "error",
-                        "PARZIALMENTE_CONFORME": "warning",
-                        "NON_APPLICABILE": "secondary",
-                    }.get(verdict, "secondary")
-
-                    st.markdown(f"**{req_id}** — `{verdict_display}`")
+                    st.markdown(f"**{req_id}** — `{verdict.replace('_', ' ')}`")
 
                     if req_text:
                         st.caption(req_text[:200] + "..." if len(req_text) > 200 else req_text)
@@ -382,79 +303,269 @@ if st.session_state.gap_report:
 
                     st.divider()
 
-    # ---------------------------------------------------------------------------
-    # Chat section
-    # ---------------------------------------------------------------------------
-    st.divider()
+
+def render_chat(report_id: int, report: Dict[str, Any]) -> None:
+    """Chat with the AIU consultant about a specific report."""
     st.header("Consulente ISO 42001 — Chat")
 
-    # Display chat history
+    histories = st.session_state.chat_histories
+    history = histories.get(report_id, [])
+
     chat_container = st.container()
     with chat_container:
-        for msg in st.session_state.chat_history:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            with st.chat_message(role):
-                st.markdown(content)
+        for msg in history:
+            with st.chat_message(msg.get("role", "user")):
+                st.markdown(msg.get("content", ""))
 
-    # Chat input
     user_input = st.chat_input(
         "Fai una domanda sull'analisi di conformità...",
-        key="chat_input",
+        key=f"chat_input_{report_id}",
     )
 
-    if user_input and org_id:
-        # Display user message immediately
+    if user_input:
         with chat_container:
             with st.chat_message("user"):
                 st.markdown(user_input)
 
         with st.spinner("Elaborazione risposta..."):
-            result = send_chat_message(
-                org_id=org_id,
-                message=user_input,
-                gap_report=report,
-                chat_history=st.session_state.chat_history,
+            result = api_post(
+                "/chat",
+                json={
+                    "org_id": "",  # fixed server-side (single-company instance)
+                    "message": user_input,
+                    "gap_report": report,
+                    "chat_history": history,
+                },
+                timeout=180.0,
             )
 
         if result:
-            assistant_msg = result.get("message", "")
-            st.session_state.chat_history = result.get("chat_history", [])
-
-            with chat_container:
-                with st.chat_message("assistant"):
-                    st.markdown(assistant_msg)
-
+            histories[report_id] = result.get("chat_history", [])
             st.rerun()
 
-    elif user_input and not org_id:
-        st.warning("Inserisci un Organization ID nella barra laterale prima di chattare.")
 
-else:
-    # No report yet — show instructions
-    st.markdown(
-        """
-        ## Come iniziare
+def render_report_list_and_detail(
+    reports: List[dict],
+    key_prefix: str,
+    show_chat: bool = True,
+    review_controls: bool = False,
+) -> None:
+    """Shared report browser: selectbox → dashboard (+ optional chat / review)."""
+    if not reports:
+        st.info("Nessun report disponibile.")
+        return
 
-        1. **Inserisci l'Organization ID** nella barra laterale (es. `acme-corp-2024`)
-        2. **Carica i documenti** organizzativi (policy, procedure, valutazioni del rischio)
-        3. Clicca **Avvia Analisi** per avviare l'analisi di conformità ISO 42001
-
-        ### Cosa viene analizzato
-
-        Il sistema valuta la conformità a **tutti i requisiti ISO/IEC 42001:2023**:
-
-        | Agente | Clausole | Requisiti |
-        |--------|----------|-----------|
-        | AS-1 | 4 (Contesto), 5 (Leadership), 6 (Pianificazione) | 10 |
-        | AS-2 | 7 (Supporto), 8 (Operazioni) + Annex A.2-A.6 | 24 |
-        | AS-3 | 9 (Valutazione), 10 (Miglioramento) + Annex A.7-A.10 | 19 |
-
-        ### Output
-
-        - **Punteggio di conformità** (0-100)
-        - **Schede di valutazione** per ogni requisito
-        - **Piano d'azione** prioritizzato
-        - **Consulente conversazionale** per approfondimenti
-        """
+    options = {
+        f"Report #{r['id']} — {r['status']} — {r['created_at'][:19]} "
+        f"(score: {r.get('overall_compliance_score') or '—'})": r["id"]
+        for r in reports
+    }
+    selected_label = st.selectbox(
+        "Seleziona un report",
+        list(options.keys()),
+        key=f"{key_prefix}_select",
     )
+    report_id = options[selected_label]
+
+    detail = api_get(f"/reports/{report_id}")
+    if not detail:
+        return
+
+    meta_cols = st.columns(4)
+    meta_cols[0].markdown(f"**Stato:** `{detail['status']}`")
+    meta_cols[1].markdown(f"**Creato da:** {detail['created_by']}")
+    if detail.get("reviewed_by"):
+        meta_cols[2].markdown(f"**Revisionato da:** {detail['reviewed_by']}")
+    if detail.get("review_comment"):
+        meta_cols[3].markdown(f"**Commento:** {detail['review_comment']}")
+
+    if review_controls and detail["status"] == "PENDING_REVIEW":
+        st.divider()
+        st.subheader("Revisione del certificatore")
+        st.caption(
+            "Verifica i risultati dell'analisi qui sotto. Approvando il report, "
+            "questo diventerà visibile ai dipendenti."
+        )
+        comment = st.text_area("Commento (opzionale)", key=f"{key_prefix}_comment_{report_id}")
+        col_a, col_r = st.columns(2)
+        with col_a:
+            if st.button("✅ Approva report", type="primary", key=f"{key_prefix}_approve_{report_id}", use_container_width=True):
+                result = api_post(f"/reports/{report_id}/review", json={"approve": True, "comment": comment})
+                if result:
+                    st.success(f"Report #{report_id} approvato.")
+                    st.rerun()
+        with col_r:
+            if st.button("❌ Rifiuta report", key=f"{key_prefix}_reject_{report_id}", use_container_width=True):
+                result = api_post(f"/reports/{report_id}/review", json={"approve": False, "comment": comment})
+                if result:
+                    st.warning(f"Report #{report_id} rifiutato.")
+                    st.rerun()
+
+    st.divider()
+    render_report_dashboard(detail["report"])
+
+    if show_chat:
+        st.divider()
+        render_chat(report_id, detail["report"])
+
+
+# ---------------------------------------------------------------------------
+# Documents section
+# ---------------------------------------------------------------------------
+
+def render_documents_section(can_upload: bool) -> None:
+    if can_upload:
+        st.subheader("Carica documenti")
+        uploaded_files = st.file_uploader(
+            "Carica documenti organizzativi (policy, procedure, valutazioni del rischio)",
+            accept_multiple_files=True,
+            type=["txt", "pdf", "md"],
+            key="doc_uploader",
+        )
+        if uploaded_files and st.button("Salva documenti", type="primary"):
+            file_tuples = []
+            for f in uploaded_files:
+                f.seek(0)
+                file_tuples.append(("files", (f.name, f.read(), "application/octet-stream")))
+            try:
+                with httpx.Client(timeout=120.0) as client:
+                    resp = client.post(
+                        f"{ORCHESTRATOR_URL}/documents",
+                        files=file_tuples,
+                        headers=_auth_headers(),
+                    )
+                    resp.raise_for_status()
+                    saved = resp.json().get("uploaded", [])
+                    st.success(f"{len(saved)} documento/i caricato/i.")
+                    st.rerun()
+            except httpx.HTTPStatusError as exc:
+                _show_http_error(exc)
+            except Exception as exc:
+                st.error(f"Errore durante il caricamento: {exc}")
+
+        st.divider()
+
+    if st.session_state.role == "certifier":
+        st.subheader("Tutti i documenti aziendali")
+    else:
+        st.subheader("I miei documenti")
+
+    docs = api_get("/documents")
+    if docs is None:
+        return
+    if not docs:
+        st.info("Nessun documento caricato.")
+        return
+
+    for doc in docs:
+        cols = st.columns([4, 2, 2, 1])
+        cols[0].markdown(f"📄 **{doc['filename']}**")
+        cols[1].caption(f"Caricato da: {doc['uploader']}")
+        cols[2].caption(doc["uploaded_at"][:19])
+        if cols[3].button("🗑️", key=f"del_doc_{doc['id']}", help="Elimina documento"):
+            if api_delete(f"/documents/{doc['id']}"):
+                st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Employee view
+# ---------------------------------------------------------------------------
+
+def render_employee_view() -> None:
+    tab_docs, tab_analysis, tab_reports = st.tabs(
+        ["📄 Documenti", "🔍 Analisi", "📊 Report approvati"]
+    )
+
+    with tab_docs:
+        render_documents_section(can_upload=True)
+
+    with tab_analysis:
+        st.subheader("Avvia l'analisi di conformità")
+        st.caption(
+            "L'analisi valuta TUTTI i documenti aziendali caricati (di tutti i dipendenti) "
+            "rispetto ai requisiti ISO/IEC 42001. Il report risultante sarà visibile solo "
+            "dopo l'approvazione del certificatore."
+        )
+
+        if st.session_state.analysis_notice:
+            st.info(st.session_state.analysis_notice)
+
+        if st.button("Avvia Analisi", type="primary"):
+            with st.spinner("Analisi ISO 42001 in corso... Può richiedere diversi minuti."):
+                result = api_post("/analyze", timeout=3600.0)
+            if result:
+                st.session_state.analysis_notice = result.get(
+                    "message", "Analisi completata, in attesa di revisione."
+                )
+                st.success(
+                    f"Analisi completata (report #{result.get('report_id')}). "
+                    "Il report è in attesa di verifica da parte del certificatore."
+                )
+
+    with tab_reports:
+        st.subheader("Report approvati dal certificatore")
+        reports = api_get("/reports")
+        if reports is not None:
+            render_report_list_and_detail(reports, key_prefix="emp", show_chat=True)
+
+
+# ---------------------------------------------------------------------------
+# Certifier view
+# ---------------------------------------------------------------------------
+
+def render_certifier_view() -> None:
+    tab_pending, tab_all, tab_docs = st.tabs(
+        ["🔎 Da revisionare", "📊 Tutti i report", "📄 Documenti"]
+    )
+
+    with tab_pending:
+        st.subheader("Report in attesa di revisione")
+        reports = api_get("/reports")
+        if reports is not None:
+            pending = [r for r in reports if r["status"] == "PENDING_REVIEW"]
+            render_report_list_and_detail(
+                pending, key_prefix="cert_pending", show_chat=False, review_controls=True
+            )
+
+    with tab_all:
+        st.subheader("Storico report")
+        reports = api_get("/reports")
+        if reports is not None:
+            render_report_list_and_detail(
+                reports, key_prefix="cert_all", show_chat=True, review_controls=True
+            )
+
+    with tab_docs:
+        render_documents_section(can_upload=False)
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+if not st.session_state.token:
+    render_login_page()
+else:
+    with st.sidebar:
+        st.title("ISO/IEC 42001")
+        st.subheader("Gap Analysis System")
+        st.divider()
+
+        role_label = "Certificatore" if st.session_state.role == "certifier" else "Dipendente"
+        st.markdown(f"👤 **{st.session_state.username}**")
+        st.caption(f"Ruolo: {role_label}")
+
+        if st.button("Esci", use_container_width=True):
+            logout()
+            st.rerun()
+
+        st.divider()
+        st.caption("ISO/IEC 42001:2023 AI Management System")
+        st.caption("Coverage: Clauses 4-10 + Annex A")
+
+    st.title("ISO/IEC 42001 Compliance Gap Analysis")
+
+    if st.session_state.role == "certifier":
+        render_certifier_view()
+    else:
+        render_employee_view()

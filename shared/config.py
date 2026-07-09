@@ -14,6 +14,10 @@ load_dotenv()
 class Settings:
     """Application settings loaded from environment variables."""
 
+    # Single-company deployment: this instance serves exactly one company.
+    # ORG_ID is a fixed internal identifier (used for ChromaDB chunk scoping).
+    ORG_ID: str = os.getenv("ORG_ID", "company")
+
     # LLM provider
     LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "ollama")
 

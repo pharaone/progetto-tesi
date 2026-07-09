@@ -199,10 +199,12 @@ services:
       - "8000:8000"
     volumes:
       - chromadb_data:/data/chromadb
+      - app_data:/data/app
     env_file:
       - .env
     environment:
       - CHROMADB_PATH=/data/chromadb
+      - APP_DB_PATH=/data/app/app.db
       - AS1_URL=http://as1:8001
       - AS2_URL=http://as2:8002
       - AS3_URL=http://as3:8003
@@ -253,4 +255,6 @@ volumes:
   chromadb_data:
     driver: local
   onnx_cache:
+    driver: local
+  app_data:
     driver: local

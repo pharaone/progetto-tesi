@@ -18,10 +18,11 @@ COPY rag/ /app/rag/
 # Copy orchestrator code
 COPY orchestrator/__init__.py /app/orchestrator/__init__.py
 COPY orchestrator/graph.py /app/orchestrator/graph.py
+COPY orchestrator/db.py /app/orchestrator/db.py
 COPY orchestrator/main.py /app/orchestrator/main.py
 
 # Create data directory
-RUN mkdir -p /data/chromadb
+RUN mkdir -p /data/chromadb /data/app
 
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
