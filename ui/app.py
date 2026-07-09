@@ -7,8 +7,13 @@ Single-company deployment with two authenticated roles:
 - Certifier: reviews pending gap reports and approves/rejects them before
              they become visible to employees.
 
-Layout: compact centered login card → top bar (no sidebar) → tabbed views.
-Chat opens in a modal dialog from the report view.
+Design notes:
+- Icons are Google Material Symbols (Apache 2.0), bundled by Streamlit and
+  rendered offline via the ":material/name:" markdown directive — no emojis,
+  no external CDN.
+- Login is a two-panel page: product explanation + compact auth card.
+- After login: slim top bar (no sidebar) and pill-styled tabs.
+- Chat opens in a modal dialog from the report view.
 """
 
 from __future__ import annotations
@@ -28,7 +33,7 @@ ANALYZE_TIMEOUT = float(os.getenv("UI_ANALYZE_TIMEOUT", "3600"))
 
 st.set_page_config(
     page_title="ISO/IEC 42001 Gap Analysis",
-    page_icon="✅",
+    page_icon=":material/verified:",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -66,18 +71,81 @@ header[data-testid="stHeader"] {height: 0; visibility: hidden;}
 </style>
 """
 
+_APP_CSS = """
+<style>
+/* ---- Modern pill tabs ---- */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 8px;
+    padding: 4px 0 10px 0;
+}
+.stTabs [data-baseweb="tab"] {
+    height: 40px;
+    border-radius: 20px;
+    padding: 0 22px;
+    background-color: #F4F6FA;
+    border: 1px solid #E3E8F0;
+    font-weight: 500;
+    color: #3D4451;
+}
+.stTabs [data-baseweb="tab"]:hover {
+    background-color: #E8EDF5;
+    color: #1A1D23;
+}
+.stTabs [aria-selected="true"] {
+    background-color: #2563EB !important;
+    border-color: #2563EB !important;
+    color: #FFFFFF !important;
+}
+/* Remove the default underline/highlight bar of the tab bar */
+.stTabs [data-baseweb="tab-highlight"],
+.stTabs [data-baseweb="tab-border"] {
+    display: none;
+}
+</style>
+"""
+
 _LOGIN_CSS = """
 <style>
-/* Compact centered login card */
-.block-container {max-width: 430px; padding-top: 4rem;}
+.block-container {max-width: 1080px; padding-top: 3.2rem;}
+
+/* Auth card */
 div[data-testid="stForm"] {
-    border: 1px solid rgba(128, 128, 128, 0.25);
-    border-radius: 12px;
-    padding: 1.4rem 1.4rem 1rem 1.4rem;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
+    border: 1px solid #E3E8F0;
+    border-radius: 14px;
+    padding: 1.5rem 1.5rem 1.1rem 1.5rem;
+    box-shadow: 0 8px 24px rgba(16, 42, 100, 0.08);
+    background: #FFFFFF;
 }
-h1 {text-align: center; font-size: 1.6rem !important; margin-bottom: 0 !important;}
-.login-subtitle {text-align: center; color: gray; margin-bottom: 1.2rem;}
+
+/* Feature rows on the left panel */
+.feature-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.65rem;
+    margin-bottom: 0.9rem;
+    line-height: 1.35;
+}
+.feature-row .material-symbols-rounded {color: #2563EB;}
+
+.login-hero-title {
+    font-size: 2rem;
+    font-weight: 700;
+    margin-bottom: 0.2rem;
+}
+.login-hero-sub {
+    color: #5A6272;
+    font-size: 1.02rem;
+    margin-bottom: 1.6rem;
+}
+.roles-box {
+    border: 1px solid #E3E8F0;
+    border-radius: 10px;
+    background: #F4F6FA;
+    padding: 0.9rem 1.1rem;
+    font-size: 0.9rem;
+    color: #3D4451;
+    margin-top: 1.2rem;
+}
 </style>
 """
 
@@ -163,60 +231,97 @@ def logout() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Login page (compact centered card)
+# Login page — two panels: product explanation + auth card
 # ---------------------------------------------------------------------------
 
 def render_login_page() -> None:
     st.markdown(_LOGIN_CSS, unsafe_allow_html=True)
 
-    st.markdown("# ✅ ISO/IEC 42001")
-    st.markdown(
-        '<p class="login-subtitle">Compliance Gap Analysis — accedi per continuare</p>',
-        unsafe_allow_html=True,
-    )
+    col_info, col_form = st.columns([1.25, 1], gap="large")
 
-    tab_login, tab_register = st.tabs(["Accedi", "Registrati"])
+    with col_info:
+        # NB: the :material/...: directive only works in plain markdown,
+        # not inside raw HTML blocks
+        st.markdown("## :material/verified: Gap Analysis ISO/IEC 42001")
+        st.markdown(
+            '<div class="login-hero-sub">Piattaforma multi-agente per la valutazione '
+            "della conformità del sistema di gestione dell'intelligenza artificiale "
+            "(AI Management System) allo standard ISO/IEC 42001:2023.</div>",
+            unsafe_allow_html=True,
+        )
 
-    with tab_login:
-        with st.form("login_form"):
-            username = st.text_input("Username", key="login_username")
-            password = st.text_input("Password", type="password", key="login_password")
-            submitted = st.form_submit_button("Accedi", type="primary", use_container_width=True)
+        st.markdown(
+            ":material/smart_toy: **Agenti AI specializzati** — tre agenti valutano in parallelo "
+            "le Clausole 4-10 e i controlli dell'Annex A rispetto alla documentazione aziendale."
+        )
+        st.markdown(
+            ":material/upload_file: **Documenti riservati** — ogni dipendente carica e gestisce "
+            "i propri documenti (policy, procedure, valutazioni del rischio); nessun altro dipendente può vederli."
+        )
+        st.markdown(
+            ":material/fact_check: **Verifica del certificatore** — ogni report di gap analysis "
+            "viene validato da un certificatore prima di essere pubblicato ai dipendenti."
+        )
+        st.markdown(
+            ":material/forum: **Consulente interattivo** — una chat dedicata su ciascun report "
+            "per approfondire gap, priorità e azioni correttive."
+        )
+        st.markdown(
+            ":material/trending_up: **Miglioramento continuo** — aggiungi chiarimenti alle non "
+            "conformità: diventano documenti aziendali e alimentano l'analisi successiva."
+        )
 
-        if submitted:
-            if not username or not password:
-                st.warning("Inserisci username e password.")
-            else:
-                result = api_post("/auth/login", json={"username": username, "password": password})
-                if result:
-                    st.session_state.token = result["token"]
-                    st.session_state.username = result["username"]
-                    st.session_state.role = result["role"]
-                    st.rerun()
+        st.markdown(
+            '<div class="roles-box"><b>Come accedere</b><br>'
+            "<b>Dipendente</b>: crea un account dalla scheda <i>Registrati</i>.<br>"
+            "<b>Certificatore</b>: usa le credenziali fornite dall'amministratore di sistema.</div>",
+            unsafe_allow_html=True,
+        )
 
-    with tab_register:
-        st.caption("La registrazione crea un account **dipendente**. L'account del certificatore è configurato dall'amministratore.")
-        with st.form("register_form"):
-            new_username = st.text_input("Username", key="reg_username")
-            new_password = st.text_input("Password (min 6 caratteri)", type="password", key="reg_password")
-            new_password2 = st.text_input("Conferma password", type="password", key="reg_password2")
-            reg_submitted = st.form_submit_button("Registrati", type="primary", use_container_width=True)
+    with col_form:
+        tab_login, tab_register = st.tabs(["Accedi", "Registrati"])
 
-        if reg_submitted:
-            if not new_username or not new_password:
-                st.warning("Inserisci username e password.")
-            elif new_password != new_password2:
-                st.warning("Le password non coincidono.")
-            elif len(new_password) < 6:
-                st.warning("La password deve avere almeno 6 caratteri.")
-            else:
-                result = api_post("/auth/register", json={"username": new_username, "password": new_password})
-                if result:
-                    st.session_state.token = result["token"]
-                    st.session_state.username = result["username"]
-                    st.session_state.role = result["role"]
-                    st.success("Registrazione completata!")
-                    st.rerun()
+        with tab_login:
+            with st.form("login_form"):
+                st.markdown("##### Accedi al tuo account")
+                username = st.text_input("Username", key="login_username")
+                password = st.text_input("Password", type="password", key="login_password")
+                submitted = st.form_submit_button("Accedi", type="primary", use_container_width=True)
+
+            if submitted:
+                if not username or not password:
+                    st.warning("Inserisci username e password.")
+                else:
+                    result = api_post("/auth/login", json={"username": username, "password": password})
+                    if result:
+                        st.session_state.token = result["token"]
+                        st.session_state.username = result["username"]
+                        st.session_state.role = result["role"]
+                        st.rerun()
+
+        with tab_register:
+            with st.form("register_form"):
+                st.markdown("##### Crea un account dipendente")
+                new_username = st.text_input("Username", key="reg_username")
+                new_password = st.text_input("Password (min 6 caratteri)", type="password", key="reg_password")
+                new_password2 = st.text_input("Conferma password", type="password", key="reg_password2")
+                reg_submitted = st.form_submit_button("Registrati", type="primary", use_container_width=True)
+
+            if reg_submitted:
+                if not new_username or not new_password:
+                    st.warning("Inserisci username e password.")
+                elif new_password != new_password2:
+                    st.warning("Le password non coincidono.")
+                elif len(new_password) < 6:
+                    st.warning("La password deve avere almeno 6 caratteri.")
+                else:
+                    result = api_post("/auth/register", json={"username": new_username, "password": new_password})
+                    if result:
+                        st.session_state.token = result["token"]
+                        st.session_state.username = result["username"]
+                        st.session_state.role = result["role"]
+                        st.success("Registrazione completata!")
+                        st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -224,22 +329,23 @@ def render_login_page() -> None:
 # ---------------------------------------------------------------------------
 
 def render_top_bar() -> None:
-    role_label = "Certificatore" if st.session_state.role == "certifier" else "Dipendente"
-    role_icon = "🛡️" if st.session_state.role == "certifier" else "👤"
+    is_certifier = st.session_state.role == "certifier"
+    role_label = "Certificatore" if is_certifier else "Dipendente"
+    role_icon = ":material/verified_user:" if is_certifier else ":material/person:"
 
     with st.container(border=True):
         col_title, col_user, col_logout = st.columns([6, 3, 1], vertical_alignment="center")
         with col_title:
             st.markdown(
-                "**✅ ISO/IEC 42001 — Gap Analysis**  \n"
-                "<span style='color: gray; font-size: 0.8rem;'>"
+                ":material/verified: **ISO/IEC 42001 — Gap Analysis**  \n"
+                "<span style='color: #5A6272; font-size: 0.8rem;'>"
                 "AI Management System · Clauses 4-10 + Annex A</span>",
                 unsafe_allow_html=True,
             )
         with col_user:
             st.markdown(
                 f"{role_icon} **{st.session_state.username}**  \n"
-                f"<span style='color: gray; font-size: 0.8rem;'>{role_label}</span>",
+                f"<span style='color: #5A6272; font-size: 0.8rem;'>{role_label}</span>",
                 unsafe_allow_html=True,
             )
         with col_logout:
@@ -252,7 +358,7 @@ def render_top_bar() -> None:
 # Chat dialog (popup)
 # ---------------------------------------------------------------------------
 
-@st.dialog("💬 Consulente ISO 42001", width="large")
+@st.dialog("Consulente ISO 42001", width="large")
 def chat_dialog() -> None:
     report_id = st.session_state.chat_report_id
     report = st.session_state.chat_report
@@ -306,7 +412,7 @@ def chat_dialog() -> None:
 
 
 def open_chat_button(report_id: int, report: Dict[str, Any], key: str) -> None:
-    if st.button("💬 Chat con il consulente", key=key):
+    if st.button("Chat con il consulente", key=key):
         st.session_state.chat_report_id = report_id
         st.session_state.chat_report = report
         chat_dialog()
@@ -336,7 +442,7 @@ def render_report_dashboard(
         failed = ", ".join(report.get("failed_agents", []))
         st.warning(f"Copertura parziale — agenti falliti: {failed}. Risultati incompleti.")
 
-    st.subheader("Punteggio di conformità")
+    st.markdown("#### :material/speed: Punteggio di conformità")
     score = report.get("overall_compliance_score", 0.0)
     counts = report.get("counts", {})
 
@@ -352,7 +458,7 @@ def render_report_dashboard(
 
     prioritized_gaps = report.get("prioritized_gaps", [])
     if prioritized_gaps:
-        st.subheader(f"Gap prioritizzati ({len(prioritized_gaps)} totali)")
+        st.markdown(f"#### :material/priority_high: Gap prioritizzati ({len(prioritized_gaps)} totali)")
 
         gaps_data = []
         for gap in prioritized_gaps:
@@ -380,7 +486,7 @@ def render_report_dashboard(
 
     all_cards = report.get("evaluation_cards", [])
     if all_cards:
-        st.subheader("Schede di valutazione per gruppo di clausole")
+        st.markdown("#### :material/checklist: Schede di valutazione per gruppo di clausole")
 
         group_order = [
             ("cl-4", "Clause 4 (Context)"),
@@ -469,7 +575,7 @@ def render_report_dashboard(
                                 key=f"clar_text_{report_id}_{req_id}",
                                 height=100,
                             )
-                            submitted = st.form_submit_button("💬 Invia chiarimento")
+                            submitted = st.form_submit_button("Invia chiarimento")
                         if submitted:
                             if len(clar_text.strip()) < 10:
                                 st.warning("Il chiarimento deve contenere almeno 10 caratteri.")
@@ -525,7 +631,7 @@ def render_report_list_and_detail(
 
     if review_controls and detail["status"] == "PENDING_REVIEW":
         st.divider()
-        st.subheader("Revisione del certificatore")
+        st.markdown("#### :material/rate_review: Revisione del certificatore")
         st.caption(
             "Verifica i risultati dell'analisi qui sotto. Approvando il report, "
             "questo diventerà visibile ai dipendenti."
@@ -533,13 +639,13 @@ def render_report_list_and_detail(
         comment = st.text_area("Commento (opzionale)", key=f"{key_prefix}_comment_{report_id}")
         col_a, col_r = st.columns(2)
         with col_a:
-            if st.button("✅ Approva report", type="primary", key=f"{key_prefix}_approve_{report_id}", use_container_width=True):
+            if st.button("Approva report", type="primary", key=f"{key_prefix}_approve_{report_id}", use_container_width=True):
                 result = api_post(f"/reports/{report_id}/review", json={"approve": True, "comment": comment})
                 if result:
                     st.success(f"Report #{report_id} approvato.")
                     st.rerun()
         with col_r:
-            if st.button("❌ Rifiuta report", key=f"{key_prefix}_reject_{report_id}", use_container_width=True):
+            if st.button("Rifiuta report", key=f"{key_prefix}_reject_{report_id}", use_container_width=True):
                 result = api_post(f"/reports/{report_id}/review", json={"approve": False, "comment": comment})
                 if result:
                     st.warning(f"Report #{report_id} rifiutato.")
@@ -559,7 +665,7 @@ def render_report_list_and_detail(
 
 def render_documents_section(can_upload: bool) -> None:
     if can_upload:
-        st.subheader("Carica documenti")
+        st.markdown("#### :material/upload_file: Carica documenti")
         uploaded_files = st.file_uploader(
             "Carica documenti organizzativi (policy, procedure, valutazioni del rischio)",
             accept_multiple_files=True,
@@ -590,9 +696,9 @@ def render_documents_section(can_upload: bool) -> None:
         st.divider()
 
     if st.session_state.role == "certifier":
-        st.subheader("Tutti i documenti aziendali")
+        st.markdown("#### :material/folder_shared: Tutti i documenti aziendali")
     else:
-        st.subheader("I miei documenti")
+        st.markdown("#### :material/folder: I miei documenti")
 
     docs = api_get("/documents")
     if docs is None:
@@ -603,10 +709,10 @@ def render_documents_section(can_upload: bool) -> None:
 
     for doc in docs:
         cols = st.columns([4, 2, 2, 1], vertical_alignment="center")
-        cols[0].markdown(f"📄 **{doc['filename']}**")
+        cols[0].markdown(f":material/description: **{doc['filename']}**")
         cols[1].caption(f"Caricato da: {doc['uploader']}")
         cols[2].caption(doc["uploaded_at"][:19])
-        if cols[3].button("🗑️", key=f"del_doc_{doc['id']}", help="Elimina documento"):
+        if cols[3].button("Elimina", key=f"del_doc_{doc['id']}", help="Elimina documento"):
             if api_delete(f"/documents/{doc['id']}"):
                 st.rerun()
 
@@ -617,14 +723,14 @@ def render_documents_section(can_upload: bool) -> None:
 
 def render_employee_view() -> None:
     tab_docs, tab_analysis, tab_reports = st.tabs(
-        ["📄 Documenti", "🔍 Analisi", "📊 Report approvati"]
+        ["Documenti", "Analisi", "Report approvati"]
     )
 
     with tab_docs:
         render_documents_section(can_upload=True)
 
     with tab_analysis:
-        st.subheader("Avvia l'analisi di conformità")
+        st.markdown("#### :material/play_circle: Avvia l'analisi di conformità")
         st.caption(
             "L'analisi valuta TUTTI i documenti aziendali caricati (di tutti i dipendenti) "
             "rispetto ai requisiti ISO/IEC 42001. Il report risultante sarà visibile solo "
@@ -647,7 +753,7 @@ def render_employee_view() -> None:
                 )
 
     with tab_reports:
-        st.subheader("Report approvati dal certificatore")
+        st.markdown("#### :material/lab_profile: Report approvati dal certificatore")
         st.caption(
             "Per i requisiti NON CONFORME o PARZIALMENTE CONFORME puoi aggiungere "
             "un chiarimento: verrà salvato tra i documenti aziendali e considerato "
@@ -666,11 +772,11 @@ def render_employee_view() -> None:
 
 def render_certifier_view() -> None:
     tab_pending, tab_all, tab_docs = st.tabs(
-        ["🔎 Da revisionare", "📊 Tutti i report", "📄 Documenti"]
+        ["Da revisionare", "Tutti i report", "Documenti"]
     )
 
     with tab_pending:
-        st.subheader("Report in attesa di revisione")
+        st.markdown("#### :material/pending_actions: Report in attesa di revisione")
         reports = api_get("/reports")
         if reports is not None:
             pending = [r for r in reports if r["status"] == "PENDING_REVIEW"]
@@ -679,7 +785,7 @@ def render_certifier_view() -> None:
             )
 
     with tab_all:
-        st.subheader("Storico report")
+        st.markdown("#### :material/history: Storico report")
         reports = api_get("/reports")
         if reports is not None:
             render_report_list_and_detail(
@@ -697,6 +803,7 @@ def render_certifier_view() -> None:
 if not st.session_state.token:
     render_login_page()
 else:
+    st.markdown(_APP_CSS, unsafe_allow_html=True)
     render_top_bar()
 
     if st.session_state.role == "certifier":

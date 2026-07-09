@@ -10,6 +10,7 @@ COPY ui/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY ui/app.py /app/app.py
+COPY ui/.streamlit /app/.streamlit
 
 ENV PYTHONUNBUFFERED=1
 
