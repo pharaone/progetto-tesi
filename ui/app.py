@@ -19,6 +19,10 @@ import streamlit as st
 
 ORCHESTRATOR_URL = os.getenv("ORCHESTRATOR_URL", "http://localhost:8000")
 
+# How long the UI waits for the full analysis pipeline (seconds).
+# Should be >= AS_TIMEOUT since the agents run in parallel behind it.
+ANALYZE_TIMEOUT = float(os.getenv("UI_ANALYZE_TIMEOUT", "3600"))
+
 st.set_page_config(
     page_title="ISO/IEC 42001 Gap Analysis",
     page_icon="✅",
@@ -492,7 +496,7 @@ def render_employee_view() -> None:
 
         if st.button("Avvia Analisi", type="primary"):
             with st.spinner("Analisi ISO 42001 in corso... Può richiedere diversi minuti."):
-                result = api_post("/analyze", timeout=3600.0)
+                result = api_post("/analyze", timeout=ANALYZE_TIMEOUT)
             if result:
                 st.session_state.analysis_notice = result.get(
                     "message", "Analisi completata, in attesa di revisione."
