@@ -38,7 +38,12 @@ def _get_client() -> chromadb.PersistentClient:
     if _client is None:
         chromadb_path = os.getenv("CHROMADB_PATH", "/data/chromadb")
         os.makedirs(chromadb_path, exist_ok=True)
-        _client = chromadb.PersistentClient(path=chromadb_path)
+        # anonymized_telemetry=False also silences the posthog version
+        # incompatibility error ("capture() takes 1 positional argument...")
+        _client = chromadb.PersistentClient(
+            path=chromadb_path,
+            settings=chromadb.Settings(anonymized_telemetry=False),
+        )
         logger.info(f"ChromaDB client initialized at {chromadb_path}")
     return _client
 
