@@ -6,3 +6,7 @@ __pycache__/
 chroma_data/
 *.db
 .DS_Store
+
+# ISO documents (licensed, never commit them)
+iso_docs/*
+!iso_docs/README.md

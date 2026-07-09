@@ -50,6 +50,7 @@ services:
     volumes:
       - chromadb_data:/data/chromadb
       - onnx_cache:/root/.cache/chroma
+      - ./iso_docs:/app/iso_docs:ro
     env_file:
       - .env
     environment:

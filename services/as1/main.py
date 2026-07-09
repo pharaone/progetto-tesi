@@ -65,6 +65,26 @@ app.add_middleware(
 # Section prefixes that AS-1 is responsible for
 _AS1_PREFIXES = ["cl-4", "cl-5", "cl-6"]
 
+# Directory where ISO 42001 documents are mounted (see docker-compose.yml)
+_ISO_DOCS_DIR = os.getenv("ISO_DOCS_DIR", "/app/iso_docs")
+
+
+@app.on_event("startup")
+async def auto_index_iso() -> None:
+    """Index the ISO standard automatically on first startup.
+
+    Runs in a background thread so /health responds immediately: embedding
+    the whole standard can take minutes (including the one-time ONNX model
+    download). Idempotent — skipped when ISO-FULL already has chunks.
+    """
+    import threading
+
+    from rag.iso_indexing import ensure_iso_indexed
+
+    threading.Thread(
+        target=ensure_iso_indexed, args=(_ISO_DOCS_DIR,), daemon=True
+    ).start()
+
 # ---------------------------------------------------------------------------
 # Prompt template
 # ---------------------------------------------------------------------------
