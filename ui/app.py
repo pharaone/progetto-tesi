@@ -255,39 +255,57 @@ def render_login_page() -> None:
     with col_info:
         # NB: the :material/...: directive only works in plain markdown,
         # not inside raw HTML blocks
-        st.markdown("## :material/verified: Gap Analysis ISO/IEC 42001")
+        st.markdown("## :material/verified: Compliance AI by Design")
         st.markdown(
-            '<div class="login-hero-sub">Piattaforma multi-agente per la valutazione '
-            "della conformità del sistema di gestione dell'intelligenza artificiale "
-            "(AI Management System) allo standard ISO/IEC 42001:2023.</div>",
+            '<div class="login-hero-sub">Sistema intelligente multi-agente per la '
+            "gap analysis e la verifica dei requisiti dello standard "
+            "<b>ISO/IEC 42001:2023</b>, il primo standard internazionale certificabile "
+            "per i sistemi di gestione dell'intelligenza artificiale "
+            "(AI Management System). Il sistema valuta la documentazione organizzativa "
+            "rispetto alle Clausole 4–10 e ai controlli dell'Annex A, producendo "
+            "valutazioni tracciabili e ancorate a evidenze documentali.</div>",
             unsafe_allow_html=True,
         )
 
         st.markdown(
-            ":material/smart_toy: **Agenti AI specializzati** — tre agenti valutano in parallelo "
-            "le Clausole 4-10 e i controlli dell'Annex A rispetto alla documentazione aziendale."
+            ":material/smart_toy: **Agenti Specializzati (AS-1, AS-2, AS-3)** — tre agenti "
+            "analizzano in parallelo le rispettive porzioni della norma: Contesto e Governance "
+            "(cl. 4–6), Supporto e Operazioni (cl. 7–8, controlli A.2–A.6), Valutazione e "
+            "Controlli Avanzati (cl. 9–10, controlli A.7–A.10)."
         )
         st.markdown(
-            ":material/upload_file: **Documenti riservati** — ogni dipendente carica e gestisce "
-            "i propri documenti (policy, procedure, valutazioni del rischio); nessun altro dipendente può vederli."
+            ":material/hub: **Agente di Gap Analysis (AGA)** — consolida le schede di "
+            "valutazione, verifica la coerenza interna e le interdipendenze tra requisiti, "
+            "e produce la prioritizzazione delle lacune con il relativo piano d'azione."
         )
         st.markdown(
-            ":material/fact_check: **Verifica del certificatore** — ogni report di gap analysis "
-            "viene validato da un certificatore prima di essere pubblicato ai dipendenti."
+            ":material/forum: **Agente di Interfaccia Utente (AIU)** — consulente "
+            "conversazionale che rende navigabile il report: approfondisci gap, priorità "
+            "e azioni correttive in linguaggio naturale (human-in-the-loop)."
         )
         st.markdown(
-            ":material/forum: **Consulente interattivo** — una chat dedicata su ciascun report "
-            "per approfondire gap, priorità e azioni correttive."
+            ":material/upload_file: **Documenti riservati per dipendente** — ogni dipendente "
+            "carica e gestisce i propri documenti (policy, procedure, registri di rischio, "
+            "contratti); l'analisi considera l'intero corpus aziendale, ma la visibilità "
+            "dei file resta individuale."
         )
         st.markdown(
-            ":material/trending_up: **Miglioramento continuo** — aggiungi chiarimenti alle non "
-            "conformità: diventano documenti aziendali e alimentano l'analisi successiva."
+            ":material/fact_check: **Verifica del certificatore** — ogni report di gap "
+            "analysis è validato da un certificatore umano prima della pubblicazione ai "
+            "dipendenti, a garanzia dell'affidabilità delle valutazioni."
+        )
+        st.markdown(
+            ":material/trending_up: **Miglioramento continuo** — i chiarimenti forniti sulle "
+            "non conformità diventano documentazione organizzativa e arricchiscono il "
+            "contesto delle analisi successive."
         )
 
         st.markdown(
             '<div class="roles-box"><b>Come accedere</b><br>'
-            "<b>Dipendente</b>: crea un account dalla scheda <i>Registrati</i>.<br>"
-            "<b>Certificatore</b>: usa le credenziali fornite dall'amministratore di sistema.</div>",
+            "<b>Dipendente</b>: crea un account dalla scheda <i>Registrati</i> per caricare "
+            "documenti, avviare l'analisi e consultare i report approvati.<br>"
+            "<b>Certificatore</b>: usa le credenziali fornite dall'amministratore di sistema "
+            "per revisionare e approvare i report.</div>",
             unsafe_allow_html=True,
         )
 
@@ -352,7 +370,7 @@ def render_top_bar() -> None:
             st.markdown(
                 ":material/verified: **ISO/IEC 42001 — Gap Analysis**  \n"
                 "<span style='color: #5A6272; font-size: 0.8rem;'>"
-                "AI Management System · Clauses 4-10 + Annex A</span>",
+                "Sistema multi-agente per l'AI Management System · Clausole 4–10 + Annex A</span>",
                 unsafe_allow_html=True,
             )
         with col_user:
@@ -416,8 +434,10 @@ def chat_dialog() -> None:
     with messages_area:
         if not history:
             st.caption(
-                "Chiedi al consulente qualsiasi cosa sul report: spiegazioni dei gap, "
-                "priorità delle azioni correttive, suggerimenti sui documenti da produrre."
+                "Stai dialogando con l'Agente di Interfaccia Utente (AIU): traduce le tue "
+                "domande in linguaggio naturale in interrogazioni sul report consolidato. "
+                "Chiedi spiegazioni dei gap, priorità delle azioni correttive o suggerimenti "
+                "sui documenti da produrre."
             )
         for msg in history:
             with st.chat_message(msg.get("role", "user")):
@@ -502,22 +522,22 @@ def render_report_dashboard(
         st.markdown("#### :material/checklist: Schede di valutazione per gruppo di clausole")
 
         group_order = [
-            ("cl-4", "Clause 4 (Context)"),
-            ("cl-5", "Clause 5 (Leadership)"),
-            ("cl-6", "Clause 6 (Planning)"),
-            ("cl-7", "Clause 7 (Support)"),
-            ("cl-8", "Clause 8 (Operations)"),
-            ("cl-9", "Clause 9 (Performance)"),
-            ("cl-10", "Clause 10 (Improvement)"),
-            ("A.2", "Annex A.2"),
-            ("A.3", "Annex A.3"),
-            ("A.4", "Annex A.4"),
-            ("A.5", "Annex A.5"),
-            ("A.6", "Annex A.6"),
-            ("A.7", "Annex A.7"),
-            ("A.8", "Annex A.8"),
-            ("A.9", "Annex A.9"),
-            ("A.10", "Annex A.10"),
+            ("cl-4", "Clausola 4 — Contesto dell'organizzazione"),
+            ("cl-5", "Clausola 5 — Leadership"),
+            ("cl-6", "Clausola 6 — Pianificazione"),
+            ("cl-7", "Clausola 7 — Supporto"),
+            ("cl-8", "Clausola 8 — Operazioni"),
+            ("cl-9", "Clausola 9 — Valutazione delle prestazioni"),
+            ("cl-10", "Clausola 10 — Miglioramento"),
+            ("A.2", "Annex A.2 — Politiche per l'AI"),
+            ("A.3", "Annex A.3 — Organizzazione interna"),
+            ("A.4", "Annex A.4 — Risorse per i sistemi AI"),
+            ("A.5", "Annex A.5 — Valutazione degli impatti"),
+            ("A.6", "Annex A.6 — Ciclo di vita dei sistemi AI"),
+            ("A.7", "Annex A.7 — Dati per i sistemi AI"),
+            ("A.8", "Annex A.8 — Informazioni per le parti interessate"),
+            ("A.9", "Annex A.9 — Uso dei sistemi AI"),
+            ("A.10", "Annex A.10 — Rapporti con terze parti"),
         ]
 
         groups: Dict[str, List] = {label: [] for _, label in group_order}
@@ -646,8 +666,10 @@ def render_report_list_and_detail(
         st.divider()
         st.markdown("#### :material/rate_review: Revisione del certificatore")
         st.caption(
-            "Verifica i risultati dell'analisi qui sotto. Approvando il report, "
-            "questo diventerà visibile ai dipendenti."
+            "Verifica le schede di valutazione prodotte dagli Agenti Specializzati e la "
+            "prioritizzazione delle lacune consolidata dall'AGA. Approvando il report, questo "
+            "diventerà visibile ai dipendenti; rifiutandolo resterà accessibile solo a te. "
+            "Il commento è riportato insieme al report in entrambi i casi."
         )
         comment = st.text_area("Commento (opzionale)", key=f"{key_prefix}_comment_{report_id}")
         col_a, col_r = st.columns(2)
@@ -744,10 +766,24 @@ def render_employee_view() -> None:
 
     with tab_analysis:
         st.markdown("#### :material/play_circle: Avvia l'analisi di conformità")
+        st.markdown(
+            "L'analisi valuta **l'intero corpus documentale aziendale** (i documenti di "
+            "tutti i dipendenti) rispetto ai requisiti dello standard ISO/IEC 42001:2023, "
+            "in tre stadi:"
+        )
+        st.markdown(
+            "1. **Analisi parallela** — gli Agenti Specializzati AS-1, AS-2 e AS-3 valutano "
+            "le rispettive porzioni della norma (Clausole 4–10 e controlli Annex A), producendo "
+            "una scheda di valutazione per ciascun requisito con verdetto, evidenze documentali, "
+            "lacune e proposta correttiva.  \n"
+            "2. **Consolidamento** — l'Agente di Gap Analysis (AGA) integra le schede in un "
+            "report unico, con prioritizzazione delle lacune e piano d'azione.  \n"
+            "3. **Revisione umana** — il report resta in attesa di verifica da parte del "
+            "certificatore e diventa visibile solo dopo la sua approvazione."
+        )
         st.caption(
-            "L'analisi valuta TUTTI i documenti aziendali caricati (di tutti i dipendenti) "
-            "rispetto ai requisiti ISO/IEC 42001. Il report risultante sarà visibile solo "
-            "dopo l'approvazione del certificatore."
+            "La durata dipende dal numero di requisiti e dall'hardware di inferenza: "
+            "da alcuni minuti a oltre un'ora con inferenza su CPU."
         )
 
         if st.session_state.analysis_notice:
