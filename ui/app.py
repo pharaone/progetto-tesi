@@ -73,6 +73,9 @@ header[data-testid="stHeader"] {height: 0; visibility: hidden;}
 
 _APP_CSS = """
 <style>
+/* Minimal gap above the sticky top bar */
+.block-container {padding-top: 0.4rem;}
+
 /* ---- Modern pill tabs ---- */
 .stTabs [data-baseweb="tab-list"] {
     gap: 8px;
@@ -100,6 +103,16 @@ _APP_CSS = """
 .stTabs [data-baseweb="tab-highlight"],
 .stTabs [data-baseweb="tab-border"] {
     display: none;
+}
+
+/* ---- Sticky top bar ---- */
+/* st.container(key="topbar") tags the wrapper with the st-key-topbar class */
+.st-key-topbar {
+    position: sticky;
+    top: 0;
+    z-index: 999;
+    background: #FFFFFF;
+    box-shadow: 0 2px 10px rgba(16, 42, 100, 0.06);
 }
 </style>
 """
@@ -333,7 +346,7 @@ def render_top_bar() -> None:
     role_label = "Certificatore" if is_certifier else "Dipendente"
     role_icon = ":material/verified_user:" if is_certifier else ":material/person:"
 
-    with st.container(border=True):
+    with st.container(border=True, key="topbar"):
         col_title, col_user, col_logout = st.columns([6, 3, 1], vertical_alignment="center")
         with col_title:
             st.markdown(
