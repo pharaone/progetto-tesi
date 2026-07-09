@@ -298,12 +298,15 @@ def render_report_dashboard(report: Dict[str, Any]) -> None:
                         )
 
                     if evidences:
-                        with st.expander(f"Evidenze ({len(evidences)})", expanded=False):
-                            for ev in evidences:
-                                st.markdown(
-                                    f"- **Fonte:** {ev.get('source_doc', 'unknown')}  \n"
-                                    f"  *{ev.get('excerpt', '')[:200]}*"
-                                )
+                        # NB: no nested st.expander here — Streamlit forbids
+                        # expanders inside expanders (we're already in the
+                        # clause-group one)
+                        st.markdown(f"**Evidenze ({len(evidences)}):**")
+                        for ev in evidences:
+                            st.markdown(
+                                f"- **Fonte:** {ev.get('source_doc', 'unknown')}  \n"
+                                f"  *{ev.get('excerpt', '')[:200]}*"
+                            )
 
                     st.divider()
 
