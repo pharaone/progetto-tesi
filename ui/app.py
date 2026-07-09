@@ -6,6 +6,9 @@ Single-company deployment with two authenticated roles:
              views APPROVED reports, chats with the AIU consultant.
 - Certifier: reviews pending gap reports and approves/rejects them before
              they become visible to employees.
+
+Layout: compact centered login card → top bar (no sidebar) → tabbed views.
+Chat opens in a modal dialog from the report view.
 """
 
 from __future__ import annotations
@@ -27,7 +30,7 @@ st.set_page_config(
     page_title="ISO/IEC 42001 Gap Analysis",
     page_icon="✅",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # ---------------------------------------------------------------------------
@@ -40,9 +43,45 @@ for key, default in [
     ("role", None),
     ("chat_histories", {}),  # report_id -> list of messages
     ("analysis_notice", None),
+    ("chat_report_id", None),
+    ("chat_report", None),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
+
+
+# ---------------------------------------------------------------------------
+# Global CSS
+# ---------------------------------------------------------------------------
+
+_BASE_CSS = """
+<style>
+/* Hide default Streamlit chrome for a cleaner app look */
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+header[data-testid="stHeader"] {height: 0; visibility: hidden;}
+
+/* Tighter vertical rhythm */
+.block-container {padding-top: 1.2rem; padding-bottom: 2rem;}
+</style>
+"""
+
+_LOGIN_CSS = """
+<style>
+/* Compact centered login card */
+.block-container {max-width: 430px; padding-top: 4rem;}
+div[data-testid="stForm"] {
+    border: 1px solid rgba(128, 128, 128, 0.25);
+    border-radius: 12px;
+    padding: 1.4rem 1.4rem 1rem 1.4rem;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
+}
+h1 {text-align: center; font-size: 1.6rem !important; margin-bottom: 0 !important;}
+.login-subtitle {text-align: center; color: gray; margin-bottom: 1.2rem;}
+</style>
+"""
+
+st.markdown(_BASE_CSS, unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -119,17 +158,24 @@ def logout() -> None:
     st.session_state.role = None
     st.session_state.chat_histories = {}
     st.session_state.analysis_notice = None
+    st.session_state.chat_report_id = None
+    st.session_state.chat_report = None
 
 
 # ---------------------------------------------------------------------------
-# Login page
+# Login page (compact centered card)
 # ---------------------------------------------------------------------------
 
 def render_login_page() -> None:
-    st.title("ISO/IEC 42001 Compliance Gap Analysis")
-    st.caption("Accedi per continuare")
+    st.markdown(_LOGIN_CSS, unsafe_allow_html=True)
 
-    tab_login, tab_register = st.tabs(["Accedi", "Registrati (dipendente)"])
+    st.markdown("# ✅ ISO/IEC 42001")
+    st.markdown(
+        '<p class="login-subtitle">Compliance Gap Analysis — accedi per continuare</p>',
+        unsafe_allow_html=True,
+    )
+
+    tab_login, tab_register = st.tabs(["Accedi", "Registrati"])
 
     with tab_login:
         with st.form("login_form"):
@@ -154,7 +200,7 @@ def render_login_page() -> None:
             new_username = st.text_input("Username", key="reg_username")
             new_password = st.text_input("Password (min 6 caratteri)", type="password", key="reg_password")
             new_password2 = st.text_input("Conferma password", type="password", key="reg_password2")
-            reg_submitted = st.form_submit_button("Registrati", use_container_width=True)
+            reg_submitted = st.form_submit_button("Registrati", type="primary", use_container_width=True)
 
         if reg_submitted:
             if not new_username or not new_password:
@@ -171,6 +217,99 @@ def render_login_page() -> None:
                     st.session_state.role = result["role"]
                     st.success("Registrazione completata!")
                     st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Top bar
+# ---------------------------------------------------------------------------
+
+def render_top_bar() -> None:
+    role_label = "Certificatore" if st.session_state.role == "certifier" else "Dipendente"
+    role_icon = "🛡️" if st.session_state.role == "certifier" else "👤"
+
+    with st.container(border=True):
+        col_title, col_user, col_logout = st.columns([6, 3, 1], vertical_alignment="center")
+        with col_title:
+            st.markdown(
+                "**✅ ISO/IEC 42001 — Gap Analysis**  \n"
+                "<span style='color: gray; font-size: 0.8rem;'>"
+                "AI Management System · Clauses 4-10 + Annex A</span>",
+                unsafe_allow_html=True,
+            )
+        with col_user:
+            st.markdown(
+                f"{role_icon} **{st.session_state.username}**  \n"
+                f"<span style='color: gray; font-size: 0.8rem;'>{role_label}</span>",
+                unsafe_allow_html=True,
+            )
+        with col_logout:
+            if st.button("Esci", use_container_width=True):
+                logout()
+                st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Chat dialog (popup)
+# ---------------------------------------------------------------------------
+
+@st.dialog("💬 Consulente ISO 42001", width="large")
+def chat_dialog() -> None:
+    report_id = st.session_state.chat_report_id
+    report = st.session_state.chat_report
+    if report_id is None or report is None:
+        st.error("Nessun report selezionato.")
+        return
+
+    histories = st.session_state.chat_histories
+    history = histories.get(report_id, [])
+
+    # Messages area (filled after handling the form so new replies appear
+    # without needing an extra rerun)
+    messages_area = st.container(height=420)
+
+    with st.form(key=f"chat_form_{report_id}", clear_on_submit=True):
+        col_input, col_send = st.columns([5, 1], vertical_alignment="bottom")
+        with col_input:
+            message = st.text_input(
+                "Messaggio",
+                placeholder="Fai una domanda sull'analisi di conformità...",
+                label_visibility="collapsed",
+            )
+        with col_send:
+            sent = st.form_submit_button("Invia", type="primary", use_container_width=True)
+
+    if sent and message.strip():
+        with st.spinner("Elaborazione risposta..."):
+            result = api_post(
+                "/chat",
+                json={
+                    "org_id": "",  # fixed server-side (single-company instance)
+                    "message": message.strip(),
+                    "gap_report": report,
+                    "chat_history": history,
+                },
+                timeout=300.0,
+            )
+        if result:
+            history = result.get("chat_history", [])
+            histories[report_id] = history
+
+    with messages_area:
+        if not history:
+            st.caption(
+                "Chiedi al consulente qualsiasi cosa sul report: spiegazioni dei gap, "
+                "priorità delle azioni correttive, suggerimenti sui documenti da produrre."
+            )
+        for msg in history:
+            with st.chat_message(msg.get("role", "user")):
+                st.markdown(msg.get("content", ""))
+
+
+def open_chat_button(report_id: int, report: Dict[str, Any], key: str) -> None:
+    if st.button("💬 Chat con il consulente", key=key):
+        st.session_state.chat_report_id = report_id
+        st.session_state.chat_report = report
+        chat_dialog()
 
 
 # ---------------------------------------------------------------------------
@@ -345,46 +484,6 @@ def render_report_dashboard(
                     st.divider()
 
 
-def render_chat(report_id: int, report: Dict[str, Any]) -> None:
-    """Chat with the AIU consultant about a specific report."""
-    st.header("Consulente ISO 42001 — Chat")
-
-    histories = st.session_state.chat_histories
-    history = histories.get(report_id, [])
-
-    chat_container = st.container()
-    with chat_container:
-        for msg in history:
-            with st.chat_message(msg.get("role", "user")):
-                st.markdown(msg.get("content", ""))
-
-    user_input = st.chat_input(
-        "Fai una domanda sull'analisi di conformità...",
-        key=f"chat_input_{report_id}",
-    )
-
-    if user_input:
-        with chat_container:
-            with st.chat_message("user"):
-                st.markdown(user_input)
-
-        with st.spinner("Elaborazione risposta..."):
-            result = api_post(
-                "/chat",
-                json={
-                    "org_id": "",  # fixed server-side (single-company instance)
-                    "message": user_input,
-                    "gap_report": report,
-                    "chat_history": history,
-                },
-                timeout=180.0,
-            )
-
-        if result:
-            histories[report_id] = result.get("chat_history", [])
-            st.rerun()
-
-
 def render_report_list_and_detail(
     reports: List[dict],
     key_prefix: str,
@@ -413,13 +512,16 @@ def render_report_list_and_detail(
     if not detail:
         return
 
-    meta_cols = st.columns(4)
+    meta_cols = st.columns([2, 2, 2, 2, 2])
     meta_cols[0].markdown(f"**Stato:** `{detail['status']}`")
     meta_cols[1].markdown(f"**Creato da:** {detail['created_by']}")
     if detail.get("reviewed_by"):
         meta_cols[2].markdown(f"**Revisionato da:** {detail['reviewed_by']}")
     if detail.get("review_comment"):
         meta_cols[3].markdown(f"**Commento:** {detail['review_comment']}")
+    if show_chat:
+        with meta_cols[4]:
+            open_chat_button(report_id, detail["report"], key=f"{key_prefix}_chat_{report_id}")
 
     if review_controls and detail["status"] == "PENDING_REVIEW":
         st.divider()
@@ -449,10 +551,6 @@ def render_report_list_and_detail(
         report_id=report_id,
         allow_clarifications=allow_clarifications and detail["status"] == "APPROVED",
     )
-
-    if show_chat:
-        st.divider()
-        render_chat(report_id, detail["report"])
 
 
 # ---------------------------------------------------------------------------
@@ -504,7 +602,7 @@ def render_documents_section(can_upload: bool) -> None:
         return
 
     for doc in docs:
-        cols = st.columns([4, 2, 2, 1])
+        cols = st.columns([4, 2, 2, 1], vertical_alignment="center")
         cols[0].markdown(f"📄 **{doc['filename']}**")
         cols[1].caption(f"Caricato da: {doc['uploader']}")
         cols[2].caption(doc["uploaded_at"][:19])
@@ -599,24 +697,7 @@ def render_certifier_view() -> None:
 if not st.session_state.token:
     render_login_page()
 else:
-    with st.sidebar:
-        st.title("ISO/IEC 42001")
-        st.subheader("Gap Analysis System")
-        st.divider()
-
-        role_label = "Certificatore" if st.session_state.role == "certifier" else "Dipendente"
-        st.markdown(f"👤 **{st.session_state.username}**")
-        st.caption(f"Ruolo: {role_label}")
-
-        if st.button("Esci", use_container_width=True):
-            logout()
-            st.rerun()
-
-        st.divider()
-        st.caption("ISO/IEC 42001:2023 AI Management System")
-        st.caption("Coverage: Clauses 4-10 + Annex A")
-
-    st.title("ISO/IEC 42001 Compliance Gap Analysis")
+    render_top_bar()
 
     if st.session_state.role == "certifier":
         render_certifier_view()
