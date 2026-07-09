@@ -42,10 +42,12 @@ class Settings:
     AIU_URL: str = os.getenv("AIU_URL", "http://localhost:8005")
     ORCHESTRATOR_URL: str = os.getenv("ORCHESTRATOR_URL", "http://localhost:8000")
 
-    # Timeouts
-    AS_TIMEOUT: int = int(os.getenv("AS_TIMEOUT", "300"))
-    AGA_TIMEOUT: int = int(os.getenv("AGA_TIMEOUT", "120"))
-    AIU_TIMEOUT: int = int(os.getenv("AIU_TIMEOUT", "60"))
+    # Timeouts. AS agents evaluate 10-30+ requirements each with one LLM
+    # call per requirement — on CPU inference (Ollama without GPU) a single
+    # call can take 1-2 minutes, so the agent timeout must be generous.
+    AS_TIMEOUT: int = int(os.getenv("AS_TIMEOUT", "3600"))
+    AGA_TIMEOUT: int = int(os.getenv("AGA_TIMEOUT", "600"))
+    AIU_TIMEOUT: int = int(os.getenv("AIU_TIMEOUT", "300"))
 
     # LLM temperature — always 0 for reproducibility
     LLM_TEMPERATURE: float = 0.0
