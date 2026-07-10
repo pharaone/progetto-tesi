@@ -199,6 +199,22 @@ def query_iso_with_fallback(
     return result
 
 
+def delete_documents_by_metadata(collection_name: str, where: dict) -> int:
+    """Delete all documents in a collection matching a metadata filter.
+
+    Returns the number of chunks removed.
+    """
+    collection = get_collection(collection_name)
+    data = collection.get(where=where, include=[])
+    ids = data.get("ids", [])
+    if ids:
+        collection.delete(ids=ids)
+        logger.info(
+            f"Deleted {len(ids)} chunks matching {where} from '{collection_name}'"
+        )
+    return len(ids)
+
+
 def delete_documents_by_prefix(collection_name: str, id_prefix: str) -> int:
     """Delete all documents whose ID starts with the given prefix."""
     collection = get_collection(collection_name)

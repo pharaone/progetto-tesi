@@ -207,10 +207,36 @@ async def delete_document(
     doc_id: int,
     user: Dict[str, Any] = Depends(get_current_user),
 ) -> dict:
-    """Delete a document — employees only their own, certifier any."""
+    """Delete a document — employees only their own, certifier any.
+
+    Also removes the document's indexed chunks from the ORG-DOCS RAG
+    collection, so deleted content (e.g. an outdated clarification) no
+    longer influences future analyses.
+    """
+    settings = get_settings()
+
+    doc = db.get_document(doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
     uploader = None if user["role"] == ROLE_CERTIFIER else user["username"]
     if not db.delete_document(doc_id, uploader=uploader):
         raise HTTPException(status_code=404, detail="Document not found")
+
+    # Purge the RAG chunks (best-effort — the DB row is already gone)
+    try:
+        from rag.collections import COLLECTION_ORG_DOCS, delete_documents_by_metadata
+        removed = delete_documents_by_metadata(
+            COLLECTION_ORG_DOCS,
+            where={"$and": [
+                {"org_id": {"$eq": settings.ORG_ID}},
+                {"source": {"$eq": doc["filename"]}},
+            ]},
+        )
+        logger.info(f"Removed {removed} RAG chunks for deleted document '{doc['filename']}'")
+    except Exception as exc:
+        logger.warning(f"Failed to purge RAG chunks for '{doc['filename']}': {exc}")
+
     return {"deleted": doc_id}
 
 
@@ -332,6 +358,75 @@ async def review_report(
     new_status = db.STATUS_APPROVED if request.approve else db.STATUS_REJECTED
     logger.info(f"Report {report_id} reviewed by {user['username']}: {new_status}")
     return {"report_id": report_id, "status": new_status}
+
+
+# ---------------------------------------------------------------------------
+# System memory (ORG-HISTORY): saved chats and report summaries
+# ---------------------------------------------------------------------------
+
+@app.get("/history")
+async def get_history(user: Dict[str, Any] = Depends(get_current_user)) -> List[dict]:
+    """
+    List the entries stored in the ORG-HISTORY knowledge base: saved chat
+    exchanges and gap report summaries. These entries feed the context of
+    future chats (AIU) and analyses (AGA), so users can inspect what the
+    system "remembers".
+    """
+    settings = get_settings()
+    try:
+        from rag.collections import COLLECTION_ORG_HISTORY, get_collection
+        collection = get_collection(COLLECTION_ORG_HISTORY)
+        data = collection.get(
+            where={"org_id": settings.ORG_ID},
+            include=["documents", "metadatas"],
+        )
+    except Exception as exc:
+        logger.error(f"Failed to read ORG-HISTORY: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Could not read system memory")
+
+    entries = []
+    for doc_id, doc, meta in zip(
+        data.get("ids", []), data.get("documents", []), data.get("metadatas", [])
+    ):
+        meta = meta or {}
+        entries.append({
+            "id": doc_id,
+            "type": meta.get("type", "unknown"),  # "chat" | "gap_report"
+            "timestamp": meta.get("timestamp", ""),
+            "text": (doc or "")[:600],
+        })
+
+    entries.sort(key=lambda e: e["timestamp"], reverse=True)
+    return entries
+
+
+@app.delete("/history/{entry_id}")
+async def delete_history_entry(
+    entry_id: str,
+    user: Dict[str, Any] = Depends(get_current_user),
+) -> dict:
+    """Remove a single entry from the ORG-HISTORY knowledge base."""
+    settings = get_settings()
+    try:
+        from rag.collections import COLLECTION_ORG_HISTORY, get_collection
+        collection = get_collection(COLLECTION_ORG_HISTORY)
+        existing = collection.get(ids=[entry_id], include=["metadatas"])
+        ids = existing.get("ids", [])
+        metas = existing.get("metadatas", []) or []
+        if not ids:
+            raise HTTPException(status_code=404, detail="Memory entry not found")
+        # Safety: never delete another organization's data through this instance
+        if metas and (metas[0] or {}).get("org_id") not in (settings.ORG_ID, None):
+            raise HTTPException(status_code=404, detail="Memory entry not found")
+        collection.delete(ids=[entry_id])
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to delete ORG-HISTORY entry: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Could not delete memory entry")
+
+    logger.info(f"ORG-HISTORY entry deleted by {user['username']}: {entry_id}")
+    return {"deleted": entry_id}
 
 
 # ---------------------------------------------------------------------------

@@ -156,6 +156,15 @@ def get_all_documents_with_content() -> List[Dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+def get_document(doc_id: int) -> Optional[Dict[str, Any]]:
+    with _lock:
+        row = _get_conn().execute(
+            "SELECT id, filename, uploader, uploaded_at FROM documents WHERE id = ?",
+            (doc_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
 def delete_document(doc_id: int, uploader: Optional[str] = None) -> bool:
     """Delete a document. If uploader is given, only delete if they own it."""
     sql = "DELETE FROM documents WHERE id = ?"

@@ -753,16 +753,56 @@ def render_documents_section(can_upload: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
+# System memory section (ORG-HISTORY)
+# ---------------------------------------------------------------------------
+
+def render_memory_section() -> None:
+    st.markdown("#### :material/memory: Memoria del sistema")
+    st.caption(
+        "Il sistema salva gli scambi di chat con il consulente e le sintesi dei report "
+        "in una base di conoscenza persistente (ORG-HISTORY): queste voci arricchiscono "
+        "il contesto delle chat e delle analisi successive. Se una voce contiene "
+        "informazioni superate — ad esempio un chiarimento non più valido — eliminala: "
+        "non influenzerà più il sistema. I chiarimenti veri e propri sono invece "
+        "documenti aziendali e si gestiscono dalla sezione Documenti."
+    )
+
+    entries = api_get("/history")
+    if entries is None:
+        return
+    if not entries:
+        st.info("Nessuna voce salvata in memoria.")
+        return
+
+    type_labels = {"chat": "Scambio di chat", "gap_report": "Sintesi report"}
+    for entry in entries:
+        with st.container(border=True):
+            col_text, col_del = st.columns([6, 1], vertical_alignment="center")
+            with col_text:
+                label = type_labels.get(entry["type"], entry["type"])
+                ts = entry["timestamp"][:19].replace("T", " ")
+                st.markdown(f"**{label}** · {ts}")
+                st.caption(entry["text"][:400] + ("..." if len(entry["text"]) > 400 else ""))
+            with col_del:
+                if st.button("Elimina", key=f"del_hist_{entry['id']}"):
+                    if api_delete(f"/history/{entry['id']}"):
+                        st.rerun()
+
+
+# ---------------------------------------------------------------------------
 # Employee view
 # ---------------------------------------------------------------------------
 
 def render_employee_view() -> None:
-    tab_docs, tab_analysis, tab_reports = st.tabs(
-        ["Documenti", "Analisi", "Report approvati"]
+    tab_docs, tab_analysis, tab_reports, tab_memory = st.tabs(
+        ["Documenti", "Analisi", "Report approvati", "Memoria"]
     )
 
     with tab_docs:
         render_documents_section(can_upload=True)
+
+    with tab_memory:
+        render_memory_section()
 
     with tab_analysis:
         st.markdown("#### :material/play_circle: Avvia l'analisi di conformità")
@@ -820,8 +860,8 @@ def render_employee_view() -> None:
 # ---------------------------------------------------------------------------
 
 def render_certifier_view() -> None:
-    tab_pending, tab_all, tab_docs = st.tabs(
-        ["Da revisionare", "Tutti i report", "Documenti"]
+    tab_pending, tab_all, tab_docs, tab_memory = st.tabs(
+        ["Da revisionare", "Tutti i report", "Documenti", "Memoria"]
     )
 
     with tab_pending:
@@ -843,6 +883,9 @@ def render_certifier_view() -> None:
 
     with tab_docs:
         render_documents_section(can_upload=False)
+
+    with tab_memory:
+        render_memory_section()
 
 
 # ---------------------------------------------------------------------------
