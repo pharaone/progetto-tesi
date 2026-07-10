@@ -7,7 +7,7 @@
   ],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "15s",
   "time": {
     "from": "now-3h",
@@ -83,7 +83,9 @@
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 12,
-            "showPoints": "never"
+            "showPoints": "auto",
+            "pointSize": 6,
+            "spanNulls": true
           }
         },
         "overrides": []
@@ -129,7 +131,9 @@
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 12,
-            "showPoints": "never"
+            "showPoints": "auto",
+            "pointSize": 6,
+            "spanNulls": true
           }
         },
         "overrides": []
@@ -174,7 +178,9 @@
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 12,
-            "showPoints": "never"
+            "showPoints": "auto",
+            "pointSize": 6,
+            "spanNulls": true
           }
         },
         "overrides": []
@@ -220,7 +226,9 @@
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 12,
-            "showPoints": "never"
+            "showPoints": "auto",
+            "pointSize": 6,
+            "spanNulls": true
           }
         },
         "overrides": []
@@ -265,7 +273,9 @@
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 12,
-            "showPoints": "never"
+            "showPoints": "auto",
+            "pointSize": 6,
+            "spanNulls": true
           }
         },
         "overrides": []
