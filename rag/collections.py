@@ -11,6 +11,14 @@ from chromadb.utils import embedding_functions
 
 logger = logging.getLogger(__name__)
 
+# ChromaDB 0.5.0 ships a posthog telemetry client that crashes against
+# posthog>=3 ("capture() takes 1 positional argument but 3 were given") and
+# fires through some code paths even with anonymized_telemetry=False.
+# Silence the telemetry loggers entirely — the events are useless to us and
+# the errors pollute every service's logs.
+logging.getLogger("chromadb.telemetry").setLevel(logging.CRITICAL)
+logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICAL)
+
 # Collection names
 COLLECTION_ISO_CL456 = "ISO-CL456"
 COLLECTION_ISO_CL78_A26 = "ISO-CL78-A26"
