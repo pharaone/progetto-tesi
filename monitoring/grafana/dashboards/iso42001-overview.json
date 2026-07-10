@@ -7,7 +7,7 @@
   ],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 2,
+  "version": 3,
   "refresh": "15s",
   "time": {
     "from": "now-3h",
@@ -180,8 +180,10 @@
             "fillOpacity": 12,
             "showPoints": "auto",
             "pointSize": 6,
-            "spanNulls": true
-          }
+            "spanNulls": true,
+            "axisSoftMax": 10
+          },
+          "noValue": "0"
         },
         "overrides": []
       },
@@ -229,7 +231,8 @@
             "showPoints": "auto",
             "pointSize": 6,
             "spanNulls": true
-          }
+          },
+          "noValue": "0"
         },
         "overrides": []
       },
@@ -245,7 +248,7 @@
     },
     {
       "id": 6,
-      "title": "Requisiti valutati nell'ultima ora (per verdetto)",
+      "title": "Requisiti valutati (finestra temporale visibile, per verdetto)",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -259,7 +262,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (verdict) (increase(iso42001_requirements_evaluated_total[1h]))",
+          "expr": "sum by (verdict) (increase(iso42001_requirements_evaluated_total[$__range]))",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -276,7 +279,8 @@
             "showPoints": "auto",
             "pointSize": 6,
             "spanNulls": true
-          }
+          },
+          "noValue": "0"
         },
         "overrides": []
       },
@@ -292,7 +296,7 @@
     },
     {
       "id": 7,
-      "title": "Analisi eseguite (totale)",
+      "title": "Analisi eseguite (finestra temporale visibile)",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
@@ -306,7 +310,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (status) (iso42001_analyses_total)",
+          "expr": "sum by (status) (increase(iso42001_analyses_total[$__range]))",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -316,7 +320,10 @@
         }
       ],
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "noValue": "0",
+          "decimals": 0
+        },
         "overrides": []
       },
       "options": {
@@ -330,7 +337,7 @@
     },
     {
       "id": 8,
-      "title": "Durata pipeline di analisi p95",
+      "title": "Durata media pipeline (finestra visibile)",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
@@ -344,18 +351,19 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(iso42001_analysis_duration_seconds_bucket[6h])))",
+          "expr": "sum(increase(iso42001_analysis_duration_seconds_sum[$__range])) / sum(increase(iso42001_analysis_duration_seconds_count[$__range]))",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "legendFormat": "p95"
+          "legendFormat": "durata media"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "s"
+          "unit": "s",
+          "noValue": "nessuna analisi"
         },
         "overrides": []
       },
