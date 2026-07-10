@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -169,14 +169,29 @@ async def get_documents(user: Dict[str, Any] = Depends(get_current_user)) -> Lis
     return db.list_documents(uploader=user["username"])
 
 
+def _index_org_doc_background(content: str, filename: str, org_id: str) -> None:
+    """Index a document into ORG-DOCS — runs as a background task so the
+    HTTP response doesn't wait for chunking + embedding."""
+    from rag.indexer import index_text_as_org_doc
+    try:
+        index_text_as_org_doc(content, filename, org_id)
+        logger.info(f"Background indexing completed for '{filename}'")
+    except Exception as exc:
+        logger.error(f"Background indexing failed for '{filename}': {exc}", exc_info=True)
+
+
 @app.post("/documents")
 async def upload_documents(
+    background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(...),
     user: Dict[str, Any] = Depends(get_current_user),
 ) -> dict:
-    """Store uploaded documents (owned by the uploader) and index them into RAG."""
+    """Store uploaded documents (owned by the uploader) and index them into RAG.
+
+    The documents are persisted immediately; chunking and embedding run in
+    the background so the UI stays responsive.
+    """
     settings = get_settings()
-    from rag.indexer import index_text_as_org_doc
 
     saved = []
     for upload_file in files:
@@ -187,19 +202,16 @@ async def upload_documents(
             continue
 
         doc_id = db.add_document(filename, user["username"], content)
-
-        try:
-            index_text_as_org_doc(content, filename, settings.ORG_ID)
-        except Exception as exc:
-            logger.warning(f"Failed to index {filename}: {exc}")
-
+        background_tasks.add_task(
+            _index_org_doc_background, content, filename, settings.ORG_ID
+        )
         saved.append({"id": doc_id, "filename": filename})
 
     if not saved:
         raise HTTPException(
             status_code=400, detail="All uploaded files were empty or unreadable"
         )
-    return {"uploaded": saved}
+    return {"uploaded": saved, "indexing": "in_background"}
 
 
 @app.delete("/documents/{doc_id}")
@@ -442,6 +454,7 @@ class ClarificationRequest(BaseModel):
 async def add_clarification(
     report_id: int,
     request: ClarificationRequest,
+    background_tasks: BackgroundTasks,
     user: Dict[str, Any] = Depends(get_current_user),
 ) -> dict:
     """
@@ -495,11 +508,10 @@ async def add_clarification(
     filename = f"chiarimento_{request.requirement_id}_report{report_id}_{user['username']}.txt"
     doc_id = db.add_document(filename, user["username"], content)
 
-    from rag.indexer import index_text_as_org_doc
-    try:
-        index_text_as_org_doc(content, filename, settings.ORG_ID)
-    except Exception as exc:
-        logger.warning(f"Failed to index clarification {filename}: {exc}")
+    # Chunking + embedding happen in the background so the UI stays responsive
+    background_tasks.add_task(
+        _index_org_doc_background, content, filename, settings.ORG_ID
+    )
 
     logger.info(
         f"Clarification added: report={report_id}, requirement={request.requirement_id}, "
@@ -509,7 +521,8 @@ async def add_clarification(
         "document_id": doc_id,
         "filename": filename,
         "message": (
-            "Chiarimento salvato tra i documenti aziendali. "
+            "Chiarimento salvato tra i documenti aziendali "
+            "(indicizzazione in corso in background). "
             "Sarà considerato alla prossima analisi."
         ),
     }
