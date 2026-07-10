@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: iso42001
+    folder: ISO 42001
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

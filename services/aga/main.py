@@ -27,6 +27,7 @@ load_dotenv()
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from shared.config import get_llm, get_settings
+from shared.metrics import setup_metrics, track_llm_call
 from shared.models import (
     ActionPlanItem,
     ComplianceCounts,
@@ -59,6 +60,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+setup_metrics(app, "AGA")
 
 # ---------------------------------------------------------------------------
 # Consolidation logic
@@ -291,7 +294,8 @@ def _get_llm_summary(
 
         llm = get_llm(temperature=0.0)
         from langchain_core.messages import HumanMessage
-        response = llm.invoke([HumanMessage(content=prompt_text)])
+        with track_llm_call("AGA"):
+            response = llm.invoke([HumanMessage(content=prompt_text)])
         raw = response.content if hasattr(response, "content") else str(response)
 
         # Parse JSON

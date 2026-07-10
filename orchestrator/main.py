@@ -49,6 +49,7 @@ from shared.auth import (
     verify_password,
 )
 from shared.config import get_settings
+from shared.metrics import ANALYSES, ANALYSIS_DURATION, setup_metrics
 from shared.models import (
     ChatRequest,
     ChatResponse,
@@ -72,6 +73,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+setup_metrics(app, "orchestrator")
 
 
 @app.on_event("startup")
@@ -287,9 +290,12 @@ async def analyze(user: Dict[str, Any] = Depends(get_current_user)) -> JSONRespo
         f"documents={len(documents)}, requested_by={user['username']}"
     )
 
+    import time as _time
+    pipeline_start = _time.perf_counter()
     try:
         final_state = await run_analysis_pipeline(settings.ORG_ID, documents)
     except Exception as exc:
+        ANALYSES.labels(status="error").inc()
         logger.error(f"Pipeline failed: {exc}", exc_info=True)
         raise HTTPException(
             status_code=500, detail=f"Analysis pipeline failed: {str(exc)}"
@@ -297,10 +303,14 @@ async def analyze(user: Dict[str, Any] = Depends(get_current_user)) -> JSONRespo
 
     aga_report = final_state.get("aga_report")
     if aga_report is None:
+        ANALYSES.labels(status="error").inc()
         raise HTTPException(
             status_code=500,
             detail="Analysis pipeline completed but no report was generated. Check service logs.",
         )
+
+    ANALYSES.labels(status="success").inc()
+    ANALYSIS_DURATION.observe(_time.perf_counter() - pipeline_start)
 
     report_id = db.create_report(aga_report, created_by=user["username"])
     logger.info(f"Report {report_id} created with status PENDING_REVIEW")

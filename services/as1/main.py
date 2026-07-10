@@ -29,6 +29,7 @@ load_dotenv()
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from shared.config import get_llm, get_settings
+from shared.metrics import REQUIREMENTS_EVALUATED, setup_metrics, track_llm_call
 from shared.models import (
     AnalyzeRequest,
     CorrectiveAction,
@@ -61,6 +62,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+setup_metrics(app, "AS-1")
 
 # Section prefixes that AS-1 is responsible for
 _AS1_PREFIXES = ["cl-4", "cl-5", "cl-6"]
@@ -285,7 +288,8 @@ def _evaluate_requirement(
 
     try:
         from langchain_core.messages import HumanMessage
-        response = llm.invoke([HumanMessage(content=prompt_text)])
+        with track_llm_call("AS-1"):
+            response = llm.invoke([HumanMessage(content=prompt_text)])
         raw_output = response.content if hasattr(response, "content") else str(response)
     except Exception as exc:
         logger.error(f"LLM invocation failed for {requirement['id']}: {exc}", exc_info=True)
@@ -409,6 +413,7 @@ async def analyze(request: AnalyzeRequest) -> List[EvaluationCard]:
             input_hash=input_hash,
         )
         evaluation_cards.append(card)
+        REQUIREMENTS_EVALUATED.labels(service="AS-1", verdict=card.verdict.value).inc()
         logger.info(f"Requirement {requirement['id']}: {card.verdict}")
 
     logger.info(f"AS-1 completed: {len(evaluation_cards)} cards for org_id={org_id}")

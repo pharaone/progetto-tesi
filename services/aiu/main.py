@@ -26,6 +26,7 @@ load_dotenv()
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from shared.config import get_llm, get_settings
+from shared.metrics import setup_metrics, track_llm_call
 from shared.models import (
     ChatMessage,
     ChatRequest,
@@ -55,6 +56,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+setup_metrics(app, "AIU")
 
 # ---------------------------------------------------------------------------
 # System prompt
@@ -192,7 +195,8 @@ def _generate_response_without_report(user_message: str, chat_history: List[Chat
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
         messages = [SystemMessage(content=system), HumanMessage(content=user_message)]
-        response = llm.invoke(messages)
+        with track_llm_call("AIU"):
+            response = llm.invoke(messages)
         return response.content if hasattr(response, "content") else str(response)
     except Exception as exc:
         logger.error(f"LLM failed: {exc}")
@@ -249,7 +253,8 @@ async def chat(request: ChatRequest) -> ChatResponse:
         llm = get_llm(temperature=0.0)
         try:
             messages = _build_conversation_prompt(system_prompt, chat_history, user_message)
-            response = llm.invoke(messages)
+            with track_llm_call("AIU"):
+                response = llm.invoke(messages)
             assistant_response = response.content if hasattr(response, "content") else str(response)
         except Exception as exc:
             logger.error(f"LLM failed during chat: {exc}", exc_info=True)
