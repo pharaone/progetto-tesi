@@ -243,6 +243,8 @@ def _get_llm_summary(
 ) -> Dict[str, Any]:
     """Get an LLM-generated executive summary."""
     try:
+        gaps_summary = _get_gaps_summary(prioritized_gaps, max_gaps=5)
+
         # Query ISO-FULL for context
         iso_context = ""
         try:
@@ -256,21 +258,24 @@ def _get_llm_summary(
         except Exception:
             iso_context = ""
 
-        # Query ORG-HISTORY
+        # Query ORG-HISTORY keyed on the CURRENT gaps, so clarifications and
+        # prior assessments related to these requirements surface in the
+        # synthesis (thesis §3.3.4: the AGA incorporates clarifications from
+        # previous sessions when prioritizing gaps)
         history_context = ""
         try:
             hist_results = rag_query(
                 COLLECTION_ORG_HISTORY,
-                f"gap analysis {org_id}",
-                n_results=2,
+                gaps_summary[:400] if prioritized_gaps else f"gap analysis {org_id}",
+                n_results=4,
                 where={"org_id": org_id},
             )
             hist_docs = hist_results.get("documents", [[]])[0]
-            history_context = "\n".join(hist_docs[:1])[:500] if hist_docs else "No previous assessments."
+            history_context = (
+                "\n---\n".join(hist_docs[:3])[:1200] if hist_docs else "No previous assessments."
+            )
         except Exception:
             history_context = "No previous assessments."
-
-        gaps_summary = _get_gaps_summary(prioritized_gaps, max_gaps=5)
 
         prompt_text = CONSOLIDATION_PROMPT.format(
             org_id=org_id,

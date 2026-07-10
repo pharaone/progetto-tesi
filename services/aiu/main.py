@@ -115,18 +115,25 @@ def _format_gap_report_for_prompt(report: GapReport) -> dict:
     }
 
 
-def _get_chat_history_from_rag(org_id: str) -> str:
-    """Retrieve recent chat history for this org from ORG-HISTORY."""
+def _get_chat_history_from_rag(org_id: str, query_text: str) -> str:
+    """Retrieve prior exchanges relevant to the current question from ORG-HISTORY.
+
+    Semantic retrieval keyed on the user's actual message, so clarifications
+    given in previous sessions surface when the same topic comes up again
+    (thesis §3.3.4: contextual, per-organization knowledge base).
+    """
     try:
         results = rag_query(
             COLLECTION_ORG_HISTORY,
-            f"chat history {org_id}",
+            query_text,
             n_results=5,
-            where={"org_id": org_id, "type": "chat"},
+            # NB: ChromaDB requires an explicit $and for multi-key filters —
+            # a plain multi-key dict raises and would disable history retrieval
+            where={"$and": [{"org_id": {"$eq": org_id}}, {"type": {"$eq": "chat"}}]},
         )
         docs = results.get("documents", [[]])[0]
         if docs:
-            return "\n".join(docs[:3])
+            return "\n---\n".join(docs[:3])
         return "No previous conversation history."
     except Exception as exc:
         logger.warning(f"Failed to retrieve chat history: {exc}")
@@ -230,8 +237,9 @@ async def chat(request: ChatRequest) -> ChatResponse:
     else:
         report = request.gap_report
 
-        # Build system prompt with report context
-        history_context = _get_chat_history_from_rag(org_id)
+        # Build system prompt with report context; retrieve prior exchanges
+        # semantically related to the current question
+        history_context = _get_chat_history_from_rag(org_id, user_message)
         report_data = _format_gap_report_for_prompt(report)
         report_data["history_context"] = history_context
 
