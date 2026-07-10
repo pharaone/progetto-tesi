@@ -1,0 +1,126 @@
+// Architettura del sistema di Gap Analysis ISO/IEC 42001
+// Render: dot -Tpng docs/architecture.dot -o docs/architecture.png
+digraph iso42001 {
+    rankdir=TB;
+    compound=true;
+    fontname="Helvetica";
+    fontsize=12;
+    pad=0.4;
+    nodesep=0.45;
+    ranksep=0.7;
+    splines=spline;
+
+    node [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled",
+          fillcolor="#FFFFFF", color="#3D4451", penwidth=1.2];
+    edge [fontname="Helvetica", fontsize=9, color="#5A6272", fontcolor="#3D4451"];
+
+    // ------------------------------------------------------------------ utenti
+    subgraph cluster_users {
+        label="Utenti";
+        style="rounded,dashed";
+        color="#9AA3B2";
+        employee   [label="Dipendente\n(account self-service)", fillcolor="#EAF1FF"];
+        certifier  [label="Certificatore\n(account da .env)", fillcolor="#EAF1FF"];
+    }
+
+    // ---------------------------------------------------------------- frontend
+    ui [label=<<b>UI — Streamlit</b><br/>:8501<br/><font point-size="9">login/registrazione · documenti<br/>analisi · report · chiarimenti<br/>chat popup · memoria</font>>,
+        fillcolor="#DBEAFE", color="#2563EB", penwidth=1.6];
+
+    // ------------------------------------------------------------ orchestrator
+    subgraph cluster_orch {
+        label="Orchestrazione";
+        style="rounded";
+        color="#2563EB";
+
+        orchestrator [label=<<b>Orchestrator — FastAPI</b><br/>:8000<br/><font point-size="9">auth (token HMAC) · ruoli<br/>LangGraph DAG · job asincroni<br/>stato report: RUNNING → PENDING_REVIEW<br/>→ APPROVED / REJECTED / FAILED</font>>,
+                      fillcolor="#DBEAFE", color="#2563EB", penwidth=1.6];
+
+        sqlite [label=<<b>SQLite — app.db</b><br/><font point-size="9">users · documents · reports</font>>,
+                shape=cylinder, fillcolor="#F4F6FA"];
+    }
+
+    // -------------------------------------------------------- agenti (stadio 1)
+    subgraph cluster_agents {
+        label="Agenti Specializzati — stadio 1 (fan-out parallelo)";
+        style="rounded";
+        color="#16A34A";
+
+        as1 [label=<<b>AS-1</b> — Contesto e Governance<br/>:8001<br/><font point-size="9">Clausole 4-6<br/>auto-index ISO all'avvio</font>>, fillcolor="#DCFCE7"];
+        as2 [label=<<b>AS-2</b> — Supporto e Operazioni<br/>:8002<br/><font point-size="9">Clausole 7-8 + A.2-A.6</font>>, fillcolor="#DCFCE7"];
+        as3 [label=<<b>AS-3</b> — Valutazione e Controlli<br/>:8003<br/><font point-size="9">Clausole 9-10 + A.7-A.10</font>>, fillcolor="#DCFCE7"];
+    }
+
+    // ------------------------------------------------------ agenti (stadi 2-3)
+    aga [label=<<b>AGA</b> — Agente di Gap Analysis<br/>:8004<br/><font point-size="9">stadio 2 (fan-in): consolidamento,<br/>prioritizzazione lacune, piano d'azione</font>>,
+         fillcolor="#FEF3C7", color="#D97706"];
+
+    aiu [label=<<b>AIU</b> — Agente di Interfaccia Utente<br/>:8005<br/><font point-size="9">stadio 3: consulente conversazionale<br/>human-in-the-loop</font>>,
+         fillcolor="#FEF3C7", color="#D97706"];
+
+    // ----------------------------------------------------------- infrastruttura
+    subgraph cluster_infra {
+        label="Infrastruttura AI";
+        style="rounded";
+        color="#7C3AED";
+
+        ollama [label=<<b>Ollama</b> — LLM server<br/>:11434<br/><font point-size="9">mistral:7b · temperature=0</font>>,
+                fillcolor="#EDE9FE"];
+
+        chroma [label=<<b>ChromaDB</b> — vector store<br/><font point-size="9">volume condiviso, client embedded<br/>embedding: all-MiniLM-L6-v2 (ONNX)<br/><br/>ISO-CL456 · ISO-CL78-A26<br/>ISO-CL910-A710 · ISO-FULL<br/>ORG-DOCS · ORG-HISTORY</font>>,
+                shape=cylinder, fillcolor="#EDE9FE"];
+    }
+
+    iso_docs [label=<<b>iso_docs/</b><br/><font point-size="9">testo ISO/IEC 42001<br/>(mount read-only, git-ignored)</font>>,
+              shape=folder, fillcolor="#F4F6FA"];
+
+    // ------------------------------------------------------------- monitoring
+    subgraph cluster_monitoring {
+        label="Osservabilità";
+        style="rounded";
+        color="#DC2626";
+
+        prometheus [label=<<b>Prometheus</b><br/>:9090<br/><font point-size="9">scrape /metrics ogni 15s</font>>, fillcolor="#FEE2E2"];
+        grafana    [label=<<b>Grafana</b><br/>:3000<br/><font point-size="9">dashboard provisionata</font>>, fillcolor="#FEE2E2"];
+    }
+
+    // ================================================================== flussi
+    employee  -> ui [label="browser"];
+    certifier -> ui [label="browser"];
+
+    ui -> orchestrator [label=<REST + Bearer token<br/><font point-size="8">/auth /documents /analyze<br/>/reports /history /chat</font>>, penwidth=1.6, color="#2563EB"];
+
+    orchestrator -> sqlite [label="utenti, documenti,\nreport e stati", dir=both];
+
+    // pipeline stadio 1: fan-out parallelo
+    orchestrator -> as1 [label="POST /analyze", color="#16A34A", penwidth=1.4];
+    orchestrator -> as2 [label=<POST /analyze<br/><font point-size="8">asyncio.gather (parallelo)</font>>, color="#16A34A", penwidth=1.4];
+    orchestrator -> as3 [label="POST /analyze", color="#16A34A", penwidth=1.4];
+
+    // stadio 2 e 3
+    orchestrator -> aga [label=<POST /consolidate<br/><font point-size="8">schede AS-1/2/3 (fan-in)</font>>, color="#D97706", penwidth=1.4];
+    orchestrator -> aiu [label=<POST /chat<br/><font point-size="8">proxy autenticato</font>>, color="#D97706", penwidth=1.4];
+
+    // LLM
+    as1 -> ollama [label="LLM per requisito", color="#7C3AED"];
+    as2 -> ollama [color="#7C3AED"];
+    as3 -> ollama [color="#7C3AED"];
+    aga -> ollama [label="executive summary", color="#7C3AED"];
+    aiu -> ollama [label="risposte chat", color="#7C3AED"];
+
+    // RAG
+    as1 -> chroma [label="ISO cl.4-6 + ORG-DOCS", color="#7C3AED", style=dashed];
+    as2 -> chroma [label="ISO cl.7-8/A.2-6 + ORG-DOCS", color="#7C3AED", style=dashed];
+    as3 -> chroma [label="ISO cl.9-10/A.7-10 + ORG-DOCS", color="#7C3AED", style=dashed];
+    aga -> chroma [label="ISO-FULL + ORG-HISTORY (r/w)", color="#7C3AED", style=dashed, dir=both];
+    aiu -> chroma [label="ORG-HISTORY (r/w)", color="#7C3AED", style=dashed, dir=both];
+    orchestrator -> chroma [label=<ORG-DOCS (indicizzazione<br/>in background) · /history>, color="#7C3AED", style=dashed, dir=both];
+
+    iso_docs -> as1 [label="auto-index\nall'avvio", style=dotted];
+
+    // monitoring
+    prometheus -> orchestrator [label="/metrics", color="#DC2626", style=dotted, constraint=false];
+    prometheus -> as2 [label=<GET /metrics<br/><font point-size="8">tutti i 6 servizi</font>>, color="#DC2626", style=dotted, constraint=false];
+    prometheus -> aiu [color="#DC2626", style=dotted, constraint=false];
+    grafana -> prometheus [label="PromQL", color="#DC2626"];
+}
