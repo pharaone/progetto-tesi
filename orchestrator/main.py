@@ -80,6 +80,9 @@ setup_metrics(app, "orchestrator")
 @app.on_event("startup")
 async def startup() -> None:
     db.init_db()
+    stale = db.fail_stale_running_reports()
+    if stale:
+        logger.warning(f"Marked {stale} stale RUNNING report(s) as FAILED after restart")
 
 
 # ---------------------------------------------------------------------------
@@ -259,13 +262,42 @@ async def delete_document(
 # Analysis
 # ---------------------------------------------------------------------------
 
-@app.post("/analyze")
-async def analyze(user: Dict[str, Any] = Depends(get_current_user)) -> JSONResponse:
-    """
-    Run the full ISO 42001 gap analysis over ALL stored company documents.
+async def _run_analysis_background(report_id: int, org_id: str, documents: list) -> None:
+    """Execute the pipeline and settle the report row (async job pattern)."""
+    import time as _time
 
-    The resulting report is saved with status PENDING_REVIEW and is only
-    visible to employees after the certifier approves it.
+    pipeline_start = _time.perf_counter()
+    try:
+        final_state = await run_analysis_pipeline(org_id, documents)
+        aga_report = final_state.get("aga_report")
+        if aga_report is None:
+            raise RuntimeError(
+                "Pipeline completed but no report was generated (all agents failed?)"
+            )
+    except Exception as exc:
+        ANALYSES.labels(status="error").inc()
+        logger.error(f"Pipeline failed for report {report_id}: {exc}", exc_info=True)
+        db.fail_report(report_id, str(exc))
+        return
+
+    ANALYSES.labels(status="success").inc()
+    ANALYSIS_DURATION.observe(_time.perf_counter() - pipeline_start)
+    db.complete_report(report_id, aga_report)
+    logger.info(f"Report {report_id} completed → PENDING_REVIEW")
+
+
+@app.post("/analyze")
+async def analyze(
+    background_tasks: BackgroundTasks,
+    user: Dict[str, Any] = Depends(get_current_user),
+) -> JSONResponse:
+    """
+    Start the ISO 42001 gap analysis over ALL stored company documents.
+
+    Async job pattern: returns immediately with the report id in RUNNING
+    state; the pipeline executes in the background. Track progress via
+    GET /analysis/status, results appear as PENDING_REVIEW for the
+    certifier and become visible to employees once APPROVED.
     """
     settings = get_settings()
 
@@ -274,6 +306,14 @@ async def analyze(user: Dict[str, Any] = Depends(get_current_user)) -> JSONRespo
         raise HTTPException(
             status_code=400,
             detail="No documents uploaded yet. Upload company documents first.",
+        )
+
+    # One analysis at a time: the agents share a single LLM backend and a
+    # concurrent run would only queue on it while doubling the wait
+    if db.has_running_report():
+        raise HTTPException(
+            status_code=409,
+            detail="An analysis is already running. Wait for it to finish.",
         )
 
     documents = [
@@ -285,46 +325,38 @@ async def analyze(user: Dict[str, Any] = Depends(get_current_user)) -> JSONRespo
         for d in docs
     ]
 
-    logger.info(
-        f"Starting analysis pipeline: org_id={settings.ORG_ID}, "
-        f"documents={len(documents)}, requested_by={user['username']}"
+    report_id = db.create_running_report(created_by=user["username"])
+    background_tasks.add_task(
+        _run_analysis_background, report_id, settings.ORG_ID, documents
     )
 
-    import time as _time
-    pipeline_start = _time.perf_counter()
-    try:
-        final_state = await run_analysis_pipeline(settings.ORG_ID, documents)
-    except Exception as exc:
-        ANALYSES.labels(status="error").inc()
-        logger.error(f"Pipeline failed: {exc}", exc_info=True)
-        raise HTTPException(
-            status_code=500, detail=f"Analysis pipeline failed: {str(exc)}"
-        )
-
-    aga_report = final_state.get("aga_report")
-    if aga_report is None:
-        ANALYSES.labels(status="error").inc()
-        raise HTTPException(
-            status_code=500,
-            detail="Analysis pipeline completed but no report was generated. Check service logs.",
-        )
-
-    ANALYSES.labels(status="success").inc()
-    ANALYSIS_DURATION.observe(_time.perf_counter() - pipeline_start)
-
-    report_id = db.create_report(aga_report, created_by=user["username"])
-    logger.info(f"Report {report_id} created with status PENDING_REVIEW")
+    logger.info(
+        f"Analysis started in background: report={report_id}, "
+        f"documents={len(documents)}, requested_by={user['username']}"
+    )
 
     return JSONResponse(
         content={
             "report_id": report_id,
-            "status": db.STATUS_PENDING,
+            "status": db.STATUS_RUNNING,
             "message": (
-                "Analysis completed. The report is awaiting certifier review "
-                "and will be visible once approved."
+                "Analisi avviata in background. Puoi continuare a usare "
+                "l'applicazione: al termine il report passerà in revisione "
+                "al certificatore."
             ),
         }
     )
+
+
+@app.get("/analysis/status")
+async def analysis_status(user: Dict[str, Any] = Depends(get_current_user)) -> dict:
+    """Lightweight status of the most recent analysis (no report content) —
+    visible to every authenticated user, including employees who cannot yet
+    read the report itself."""
+    latest = db.get_latest_report_status()
+    if latest is None:
+        return {"status": None}
+    return latest
 
 
 # ---------------------------------------------------------------------------

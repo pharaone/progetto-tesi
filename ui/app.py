@@ -27,10 +27,6 @@ import streamlit as st
 
 ORCHESTRATOR_URL = os.getenv("ORCHESTRATOR_URL", "http://localhost:8000")
 
-# How long the UI waits for the full analysis pipeline (seconds).
-# Should be >= AS_TIMEOUT since the agents run in parallel behind it.
-ANALYZE_TIMEOUT = float(os.getenv("UI_ANALYZE_TIMEOUT", "3600"))
-
 st.set_page_config(
     page_title="ISO/IEC 42001 Gap Analysis",
     page_icon=":material/verified:",
@@ -47,7 +43,6 @@ for key, default in [
     ("username", None),
     ("role", None),
     ("chat_histories", {}),  # report_id -> list of messages
-    ("analysis_notice", None),
     ("chat_report_id", None),
     ("chat_report", None),
 ]:
@@ -238,7 +233,6 @@ def logout() -> None:
     st.session_state.username = None
     st.session_state.role = None
     st.session_state.chat_histories = {}
-    st.session_state.analysis_notice = None
     st.session_state.chat_report_id = None
     st.session_state.chat_report = None
 
@@ -651,6 +645,8 @@ def render_report_list_and_detail(
     if not detail:
         return
 
+    not_ready = detail["status"] in ("RUNNING", "FAILED")
+
     meta_cols = st.columns([2, 2, 2, 2, 2])
     meta_cols[0].markdown(f"**Stato:** `{detail['status']}`")
     meta_cols[1].markdown(f"**Creato da:** {detail['created_by']}")
@@ -658,9 +654,16 @@ def render_report_list_and_detail(
         meta_cols[2].markdown(f"**Revisionato da:** {detail['reviewed_by']}")
     if detail.get("review_comment"):
         meta_cols[3].markdown(f"**Commento:** {detail['review_comment']}")
-    if show_chat:
+    if show_chat and not not_ready:
         with meta_cols[4]:
             open_chat_button(report_id, detail["report"], key=f"{key_prefix}_chat_{report_id}")
+
+    if detail["status"] == "RUNNING":
+        st.info("Analisi in corso — il report sarà disponibile al completamento.")
+        return
+    if detail["status"] == "FAILED":
+        st.error(f"Analisi fallita: {detail.get('error') or 'errore sconosciuto'}")
+        return
 
     if review_controls and detail["status"] == "PENDING_REVIEW":
         st.divider()
@@ -753,6 +756,45 @@ def render_documents_section(can_upload: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Analysis status (async job pattern — polls GET /analysis/status)
+# ---------------------------------------------------------------------------
+
+@st.fragment(run_every=15)
+def render_analysis_status() -> None:
+    """Auto-refreshing status of the latest analysis (every 15s)."""
+    status = api_get("/analysis/status")
+    if not status or not status.get("status"):
+        st.caption("Nessuna analisi eseguita finora.")
+        return
+
+    s = status["status"]
+    rid = status.get("id")
+    started = (status.get("created_at") or "")[:19].replace("T", " ")
+    by = status.get("created_by", "")
+
+    if s == "RUNNING":
+        st.info(
+            f"Analisi #{rid} in corso — avviata da {by} alle {started}. "
+            "Lo stato si aggiorna automaticamente; puoi navigare nelle altre schede."
+        )
+    elif s == "PENDING_REVIEW":
+        st.success(
+            f"Ultima analisi (#{rid}) completata: in attesa di revisione del certificatore."
+        )
+    elif s == "APPROVED":
+        st.success(
+            f"Ultima analisi (#{rid}) approvata dal certificatore — "
+            "disponibile nella scheda Report approvati."
+        )
+    elif s == "REJECTED":
+        st.warning(f"Ultima analisi (#{rid}) rifiutata dal certificatore.")
+    elif s == "FAILED":
+        st.error(
+            f"Ultima analisi (#{rid}) fallita: {status.get('error') or 'errore sconosciuto'}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # System memory section (ORG-HISTORY)
 # ---------------------------------------------------------------------------
 
@@ -826,20 +868,15 @@ def render_employee_view() -> None:
             "da alcuni minuti a oltre un'ora con inferenza su CPU."
         )
 
-        if st.session_state.analysis_notice:
-            st.info(st.session_state.analysis_notice)
-
         if st.button("Avvia Analisi", type="primary"):
-            with st.spinner("Analisi ISO 42001 in corso... Può richiedere diversi minuti."):
-                result = api_post("/analyze", timeout=ANALYZE_TIMEOUT)
+            result = api_post("/analyze", timeout=60.0)
             if result:
-                st.session_state.analysis_notice = result.get(
-                    "message", "Analisi completata, in attesa di revisione."
-                )
                 st.success(
-                    f"Analisi completata (report #{result.get('report_id')}). "
-                    "Il report è in attesa di verifica da parte del certificatore."
+                    f"Analisi #{result.get('report_id')} avviata in background. "
+                    "Puoi continuare a usare l'applicazione — lo stato si aggiorna qui sotto."
                 )
+
+        render_analysis_status()
 
     with tab_reports:
         st.markdown("#### :material/lab_profile: Report approvati dal certificatore")

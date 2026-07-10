@@ -4,9 +4,9 @@ Single-company deployment: every document and report belongs to the one
 company this instance serves (ORG_ID env var), so no org scoping is stored —
 documents are scoped by uploader (employee) instead.
 
-Report lifecycle:
-    PENDING_REVIEW  →  APPROVED  (certifier approves, employees can see it)
-                    →  REJECTED  (certifier rejects with a comment)
+Report lifecycle (async job pattern — /analyze returns immediately):
+    RUNNING         →  PENDING_REVIEW  →  APPROVED  (visible to employees)
+                    →  FAILED                       →  REJECTED
 """
 
 from __future__ import annotations
@@ -23,6 +23,8 @@ from shared.auth import ROLE_CERTIFIER, ROLE_EMPLOYEE, hash_password
 
 logger = logging.getLogger(__name__)
 
+STATUS_RUNNING = "RUNNING"
+STATUS_FAILED = "FAILED"
 STATUS_PENDING = "PENDING_REVIEW"
 STATUS_APPROVED = "APPROVED"
 STATUS_REJECTED = "REJECTED"
@@ -80,6 +82,11 @@ def init_db() -> None:
             );
             """
         )
+        # Migration for databases created before the async job pattern
+        try:
+            conn.execute("ALTER TABLE reports ADD COLUMN error TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
         conn.commit()
 
     # Seed the certifier account (idempotent)
@@ -183,19 +190,78 @@ def delete_document(doc_id: int, uploader: Optional[str] = None) -> bool:
 # Reports
 # ---------------------------------------------------------------------------
 
-def create_report(report: Dict[str, Any], created_by: str) -> int:
+def create_running_report(created_by: str) -> int:
+    """Create a report row in RUNNING state; the pipeline fills it in later."""
     with _lock:
         conn = _get_conn()
         cur = conn.execute(
             "INSERT INTO reports (status, report_json, created_by, created_at) VALUES (?, ?, ?, ?)",
-            (STATUS_PENDING, json.dumps(report), created_by, _now()),
+            (STATUS_RUNNING, "{}", created_by, _now()),
         )
         conn.commit()
         return int(cur.lastrowid)
 
 
+def complete_report(report_id: int, report: Dict[str, Any]) -> None:
+    """Store the pipeline output and move the report to PENDING_REVIEW."""
+    with _lock:
+        conn = _get_conn()
+        conn.execute(
+            "UPDATE reports SET status = ?, report_json = ? WHERE id = ? AND status = ?",
+            (STATUS_PENDING, json.dumps(report), report_id, STATUS_RUNNING),
+        )
+        conn.commit()
+
+
+def fail_report(report_id: int, error: str) -> None:
+    """Mark a RUNNING report as FAILED with the error message."""
+    with _lock:
+        conn = _get_conn()
+        conn.execute(
+            "UPDATE reports SET status = ?, error = ? WHERE id = ? AND status = ?",
+            (STATUS_FAILED, error[:1000], report_id, STATUS_RUNNING),
+        )
+        conn.commit()
+
+
+def fail_stale_running_reports() -> int:
+    """Mark leftover RUNNING reports as FAILED (called at startup: a RUNNING
+    row surviving a restart means the pipeline died with the process)."""
+    with _lock:
+        conn = _get_conn()
+        cur = conn.execute(
+            "UPDATE reports SET status = ?, error = ? WHERE status = ?",
+            (STATUS_FAILED, "Interrotta dal riavvio del sistema", STATUS_RUNNING),
+        )
+        conn.commit()
+        return cur.rowcount
+
+
+def has_running_report() -> bool:
+    with _lock:
+        row = _get_conn().execute(
+            "SELECT 1 FROM reports WHERE status = ? LIMIT 1", (STATUS_RUNNING,)
+        ).fetchone()
+    return row is not None
+
+
+def get_latest_report_status() -> Optional[Dict[str, Any]]:
+    """Lightweight status of the most recent report (no content) — safe to
+    expose to employees so they can track analysis progress."""
+    with _lock:
+        row = _get_conn().execute(
+            "SELECT id, status, created_by, created_at, error FROM reports "
+            "ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    return dict(row) if row else None
+
+
 def _report_summary(row: sqlite3.Row) -> Dict[str, Any]:
-    report = json.loads(row["report_json"])
+    try:
+        report = json.loads(row["report_json"] or "{}")
+    except json.JSONDecodeError:
+        report = {}
+    keys = row.keys()
     return {
         "id": row["id"],
         "status": row["status"],
@@ -204,6 +270,7 @@ def _report_summary(row: sqlite3.Row) -> Dict[str, Any]:
         "reviewed_by": row["reviewed_by"],
         "reviewed_at": row["reviewed_at"],
         "review_comment": row["review_comment"],
+        "error": row["error"] if "error" in keys else None,
         "overall_compliance_score": report.get("overall_compliance_score"),
         "total_requirements": report.get("total_requirements"),
     }
