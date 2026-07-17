@@ -7,3 +7,8 @@ font = "sans serif"
 
 [browser]
 gatherUsageStats = false
+
+[server]
+# The inotify-based file watcher (watchdog) segfaults inside Docker on
+# macOS, and there is nothing to hot-reload in a container anyway
+fileWatcherType = "none"
