@@ -216,10 +216,15 @@ def api_delete(path: str, timeout: float = 30.0) -> Optional[dict]:
 
 def _show_http_error(exc: httpx.HTTPStatusError) -> None:
     if exc.response.status_code == 401:
+        endpoint = exc.request.url.path if exc.request else "?"
         st.session_state.token = None
         st.session_state.username = None
         st.session_state.role = None
-        st.error("Sessione scaduta. Effettua di nuovo il login.")
+        try:
+            st.query_params.pop("t", None)
+        except Exception:
+            pass
+        st.error(f"Sessione scaduta o token non valido (endpoint: {endpoint}). Effettua di nuovo il login.")
     else:
         try:
             detail = exc.response.json().get("detail", exc.response.text)
@@ -235,6 +240,54 @@ def logout() -> None:
     st.session_state.chat_histories = {}
     st.session_state.chat_report_id = None
     st.session_state.chat_report = None
+    try:
+        st.query_params.pop("t", None)
+    except Exception:
+        pass
+
+
+def _store_session(token: str, username: str, role: str) -> None:
+    """Store the login in session_state AND in the URL query params.
+
+    Streamlit wipes session_state whenever the browser websocket session
+    resets (page refresh, laptop sleep, network hiccup) — without a
+    persisted copy the user gets bounced back to the login page. The token
+    in the URL lets us restore the session transparently.
+    """
+    st.session_state.token = token
+    st.session_state.username = username
+    st.session_state.role = role
+    st.query_params["t"] = token
+
+
+def _restore_session_from_url() -> None:
+    """Rebuild the session after a Streamlit session reset, if a token is
+    present in the URL. The token is validated against the orchestrator
+    before being trusted."""
+    if st.session_state.token:
+        return
+    token = st.query_params.get("t")
+    if not token:
+        return
+
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.get(
+                f"{ORCHESTRATOR_URL}/analysis/status",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        if resp.status_code != 200:
+            st.query_params.pop("t", None)
+            return
+        # Token accepted by the server — read username/role from its payload
+        import base64
+        import json as _json
+        payload = _json.loads(base64.urlsafe_b64decode(token.split(".")[0]))
+        st.session_state.token = token
+        st.session_state.username = payload.get("username")
+        st.session_state.role = payload.get("role")
+    except Exception:
+        pass  # orchestrator unreachable — fall through to the login page
 
 
 # ---------------------------------------------------------------------------
@@ -319,9 +372,7 @@ def render_login_page() -> None:
                 else:
                     result = api_post("/auth/login", json={"username": username, "password": password})
                     if result:
-                        st.session_state.token = result["token"]
-                        st.session_state.username = result["username"]
-                        st.session_state.role = result["role"]
+                        _store_session(result["token"], result["username"], result["role"])
                         st.rerun()
 
         with tab_register:
@@ -342,9 +393,7 @@ def render_login_page() -> None:
                 else:
                     result = api_post("/auth/register", json={"username": new_username, "password": new_password})
                     if result:
-                        st.session_state.token = result["token"]
-                        st.session_state.username = result["username"]
-                        st.session_state.role = result["role"]
+                        _store_session(result["token"], result["username"], result["role"])
                         st.success("Registrazione completata!")
                         st.rerun()
 
@@ -1014,6 +1063,8 @@ def render_certifier_view() -> None:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
+_restore_session_from_url()
 
 if not st.session_state.token:
     render_login_page()
