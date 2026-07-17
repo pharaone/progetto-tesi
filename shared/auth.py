@@ -6,7 +6,9 @@ after TOKEN_TTL_SECONDS.
 
 Roles:
 - "employee":  can upload/see own documents, view APPROVED reports, chat
-- "certifier": reviews gap reports before they are released to employees
+- "admin":     employee + can configure external documentation sources
+- "certifier": reviews gap reports before they are released to employees;
+               manages user roles
 """
 
 from __future__ import annotations
@@ -21,8 +23,9 @@ import time
 from typing import Optional
 
 ROLE_EMPLOYEE = "employee"
+ROLE_ADMIN = "admin"
 ROLE_CERTIFIER = "certifier"
-VALID_ROLES = {ROLE_EMPLOYEE, ROLE_CERTIFIER}
+VALID_ROLES = {ROLE_EMPLOYEE, ROLE_ADMIN, ROLE_CERTIFIER}
 
 TOKEN_TTL_SECONDS = int(os.getenv("TOKEN_TTL_SECONDS", str(8 * 3600)))
 

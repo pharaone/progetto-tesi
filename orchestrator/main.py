@@ -42,6 +42,7 @@ load_dotenv()
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.auth import (
+    ROLE_ADMIN,
     ROLE_CERTIFIER,
     ROLE_EMPLOYEE,
     create_token,
@@ -109,6 +110,13 @@ def require_certifier(user: Dict[str, Any] = Depends(get_current_user)) -> Dict[
     return user
 
 
+def require_config_rights(user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    """Source configuration: certifier or admin (employee with extra rights)."""
+    if user["role"] not in (ROLE_CERTIFIER, ROLE_ADMIN):
+        raise HTTPException(status_code=403, detail="Admin or certifier role required")
+    return user
+
+
 # ---------------------------------------------------------------------------
 # Auth endpoints
 # ---------------------------------------------------------------------------
@@ -141,6 +149,46 @@ async def register(request: RegisterRequest) -> dict:
     db.create_user(username, request.password, ROLE_EMPLOYEE)
     token = create_token(username, ROLE_EMPLOYEE)
     return {"token": token, "username": username, "role": ROLE_EMPLOYEE}
+
+
+# ---------------------------------------------------------------------------
+# User management (certifier only)
+# ---------------------------------------------------------------------------
+
+class RoleUpdateRequest(BaseModel):
+    role: str = Field(..., description="employee | admin")
+
+
+@app.get("/users")
+async def get_users(user: Dict[str, Any] = Depends(require_certifier)) -> List[dict]:
+    """List all accounts (certifier only)."""
+    return db.list_users()
+
+
+@app.put("/users/{username}/role")
+async def update_user_role(
+    username: str,
+    request: RoleUpdateRequest,
+    user: Dict[str, Any] = Depends(require_certifier),
+) -> dict:
+    """Promote an employee to admin or demote an admin to employee.
+
+    Certifier accounts cannot be changed, and the certifier role cannot
+    be assigned this way. The new role takes effect at the target user's
+    next login (the role is embedded in the auth token).
+    """
+    if request.role not in (ROLE_EMPLOYEE, ROLE_ADMIN):
+        raise HTTPException(status_code=400, detail="Role must be 'employee' or 'admin'")
+
+    target = db.get_user(username)
+    if target is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if target["role"] == ROLE_CERTIFIER:
+        raise HTTPException(status_code=400, detail="Certifier accounts cannot be modified")
+
+    db.update_user_role(username, request.role)
+    logger.info(f"User '{username}' role set to {request.role} by {user['username']}")
+    return {"username": username, "role": request.role}
 
 
 # ---------------------------------------------------------------------------
@@ -282,8 +330,8 @@ def _get_connector_class(source_name: str):
 
 
 @app.get("/sources/config")
-async def get_sources_config(user: Dict[str, Any] = Depends(require_certifier)) -> List[dict]:
-    """Configuration forms for every connector (certifier only).
+async def get_sources_config(user: Dict[str, Any] = Depends(require_config_rights)) -> List[dict]:
+    """Configuration forms for every connector (certifier or admin).
 
     Secret values are never returned — only whether they are set.
     """
@@ -313,9 +361,9 @@ async def get_sources_config(user: Dict[str, Any] = Depends(require_certifier)) 
 async def save_source_config(
     source_name: str,
     config: Dict[str, str],
-    user: Dict[str, Any] = Depends(require_certifier),
+    user: Dict[str, Any] = Depends(require_config_rights),
 ) -> dict:
-    """Save a connector configuration (certifier only).
+    """Save a connector configuration (certifier or admin).
 
     Secret fields submitted as empty strings keep their previously stored
     value, so the certifier can edit non-secret fields without re-entering
@@ -353,7 +401,7 @@ async def save_source_config(
 @app.delete("/sources/{source_name}/config")
 async def delete_source_config(
     source_name: str,
-    user: Dict[str, Any] = Depends(require_certifier),
+    user: Dict[str, Any] = Depends(require_config_rights),
 ) -> dict:
     """Remove a UI-saved connector configuration (env vars, if any, take over)."""
     _get_connector_class(source_name)
@@ -365,7 +413,7 @@ async def delete_source_config(
 @app.post("/sources/{source_name}/test")
 async def test_source(
     source_name: str,
-    user: Dict[str, Any] = Depends(require_certifier),
+    user: Dict[str, Any] = Depends(require_config_rights),
 ) -> dict:
     """Test the current configuration by listing remote documents."""
     import asyncio as _asyncio

@@ -403,9 +403,12 @@ def render_login_page() -> None:
 # ---------------------------------------------------------------------------
 
 def render_top_bar() -> None:
-    is_certifier = st.session_state.role == "certifier"
-    role_label = "Certificatore" if is_certifier else "Dipendente"
-    role_icon = ":material/verified_user:" if is_certifier else ":material/person:"
+    role = st.session_state.role
+    role_label = {"certifier": "Certificatore", "admin": "Amministratore"}.get(role, "Dipendente")
+    role_icon = {
+        "certifier": ":material/verified_user:",
+        "admin": ":material/admin_panel_settings:",
+    }.get(role, ":material/person:")
 
     with st.container(border=True, key="topbar"):
         col_title, col_user, col_logout = st.columns([6, 3, 1], vertical_alignment="center")
@@ -764,23 +767,22 @@ def render_external_sources_section() -> None:
         return
 
     configured = [s for s in sources if s["configured"]]
-    is_certifier = st.session_state.role == "certifier"
+    can_configure = st.session_state.role in ("certifier", "admin")
 
     st.markdown("#### :material/cloud_sync: Sorgenti esterne")
     if not configured:
-        if is_certifier:
+        if can_configure:
             st.caption(
                 "Nessuna sorgente esterna configurata: usa il pannello qui sotto "
                 "per collegare GitHub o Confluence."
             )
-        else:
-            st.caption(
-                "Nessuna sorgente esterna configurata. Il certificatore può "
-                "collegare GitHub o Confluence dalla propria sezione Documenti."
-            )
-        if is_certifier:
             render_source_config_panel()
             st.divider()
+        else:
+            st.caption(
+                "Nessuna sorgente esterna configurata. Un amministratore o il "
+                "certificatore può collegare GitHub o Confluence dalla sezione Documenti."
+            )
         return
 
     any_running = False
@@ -831,7 +833,7 @@ def render_external_sources_section() -> None:
             "i documenti eliminati a monte vengono rimossi dal corpus."
         )
 
-    if is_certifier:
+    if can_configure:
         render_source_config_panel()
 
     st.divider()
@@ -1133,13 +1135,67 @@ def render_employee_view() -> None:
 
 
 # ---------------------------------------------------------------------------
+# User management (certifier)
+# ---------------------------------------------------------------------------
+
+_ROLE_LABELS = {
+    "employee": "Dipendente",
+    "admin": "Amministratore",
+    "certifier": "Certificatore",
+}
+
+
+def render_users_section() -> None:
+    st.markdown("#### :material/group: Gestione utenti")
+    st.caption(
+        "Gli **amministratori** sono dipendenti che possono anche configurare le "
+        "sorgenti esterne (GitHub/Confluence). Il cambio di ruolo ha effetto dal "
+        "prossimo accesso dell'utente."
+    )
+
+    users = api_get("/users")
+    if users is None:
+        return
+
+    for u in users:
+        cols = st.columns([3, 2, 2, 2], vertical_alignment="center")
+        icon = {
+            "certifier": ":material/verified_user:",
+            "admin": ":material/admin_panel_settings:",
+        }.get(u["role"], ":material/person:")
+        cols[0].markdown(f"{icon} **{u['username']}**")
+        cols[1].caption(_ROLE_LABELS.get(u["role"], u["role"]))
+        cols[2].caption(f"Registrato: {u['created_at'][:10]}")
+
+        with cols[3]:
+            if u["role"] == "employee":
+                if st.button("Promuovi ad admin", key=f"promote_{u['username']}"):
+                    result = api_post_put(
+                        f"/users/{u['username']}/role", {"role": "admin"}
+                    )
+                    if result:
+                        st.rerun()
+            elif u["role"] == "admin":
+                if st.button("Rendi dipendente", key=f"demote_{u['username']}"):
+                    result = api_post_put(
+                        f"/users/{u['username']}/role", {"role": "employee"}
+                    )
+                    if result:
+                        st.rerun()
+            # certifier accounts are not modifiable
+
+
+# ---------------------------------------------------------------------------
 # Certifier view
 # ---------------------------------------------------------------------------
 
 def render_certifier_view() -> None:
-    tab_pending, tab_all, tab_docs, tab_memory = st.tabs(
-        ["Da revisionare", "Tutti i report", "Documenti", "Memoria"]
+    tab_pending, tab_all, tab_docs, tab_memory, tab_users = st.tabs(
+        ["Da revisionare", "Tutti i report", "Documenti", "Memoria", "Utenti"]
     )
+
+    with tab_users:
+        render_users_section()
 
     with tab_pending:
         st.markdown("#### :material/pending_actions: Report in attesa di revisione")

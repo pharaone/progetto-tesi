@@ -147,6 +147,24 @@ def create_user(username: str, password: str, role: str = ROLE_EMPLOYEE) -> Dict
     return {"username": username, "role": role}
 
 
+def list_users() -> List[Dict[str, Any]]:
+    with _lock:
+        rows = _get_conn().execute(
+            "SELECT username, role, created_at FROM users ORDER BY created_at"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_user_role(username: str, role: str) -> bool:
+    with _lock:
+        conn = _get_conn()
+        cur = conn.execute(
+            "UPDATE users SET role = ? WHERE username = ?", (role, username)
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
 # ---------------------------------------------------------------------------
 # Documents
 # ---------------------------------------------------------------------------
