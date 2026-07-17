@@ -20,6 +20,7 @@ COPY connectors/ /app/connectors/
 COPY orchestrator/__init__.py /app/orchestrator/__init__.py
 COPY orchestrator/graph.py /app/orchestrator/graph.py
 COPY orchestrator/db.py /app/orchestrator/db.py
+COPY orchestrator/sync.py /app/orchestrator/sync.py
 COPY orchestrator/main.py /app/orchestrator/main.py
 
 # Create data directory
