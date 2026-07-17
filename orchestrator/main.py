@@ -273,6 +273,117 @@ async def get_sources(user: Dict[str, Any] = Depends(get_current_user)) -> List[
     return source_overview()
 
 
+def _get_connector_class(source_name: str):
+    from orchestrator.sync import ALL_CONNECTORS
+    for cls in ALL_CONNECTORS:
+        if cls.name == source_name:
+            return cls
+    raise HTTPException(status_code=404, detail=f"Unknown source '{source_name}'")
+
+
+@app.get("/sources/config")
+async def get_sources_config(user: Dict[str, Any] = Depends(require_certifier)) -> List[dict]:
+    """Configuration forms for every connector (certifier only).
+
+    Secret values are never returned — only whether they are set.
+    """
+    from orchestrator.sync import ALL_CONNECTORS, build_source
+
+    result = []
+    for cls in ALL_CONNECTORS:
+        stored = db.get_source_config(cls.name) or {}
+        _, origin = build_source(cls)
+        values = {}
+        for field in cls.CONFIG_FIELDS:
+            raw = (stored.get(field["key"]) or "").strip()
+            if field["secret"]:
+                values[field["key"]] = {"set": bool(raw)}
+            else:
+                values[field["key"]] = {"value": raw}
+        result.append({
+            "name": cls.name,
+            "fields": cls.CONFIG_FIELDS,
+            "values": values,
+            "config_origin": origin,
+        })
+    return result
+
+
+@app.put("/sources/{source_name}/config")
+async def save_source_config(
+    source_name: str,
+    config: Dict[str, str],
+    user: Dict[str, Any] = Depends(require_certifier),
+) -> dict:
+    """Save a connector configuration (certifier only).
+
+    Secret fields submitted as empty strings keep their previously stored
+    value, so the certifier can edit non-secret fields without re-entering
+    the token.
+    """
+    cls = _get_connector_class(source_name)
+    stored = db.get_source_config(source_name) or {}
+
+    merged: Dict[str, str] = {}
+    for field in cls.CONFIG_FIELDS:
+        key = field["key"]
+        submitted = (config.get(key) or "").strip()
+        if field["secret"] and not submitted:
+            submitted = (stored.get(key) or "").strip()
+        merged[key] = submitted
+
+    missing = [
+        f["label"] for f in cls.CONFIG_FIELDS
+        if f["required"] and not merged.get(f["key"])
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Campi obbligatori mancanti: {', '.join(missing)}",
+        )
+
+    if cls.from_config(merged) is None:
+        raise HTTPException(status_code=400, detail="Configurazione non valida")
+
+    db.set_source_config(source_name, merged)
+    logger.info(f"Source '{source_name}' configured via UI by {user['username']}")
+    return {"saved": source_name}
+
+
+@app.delete("/sources/{source_name}/config")
+async def delete_source_config(
+    source_name: str,
+    user: Dict[str, Any] = Depends(require_certifier),
+) -> dict:
+    """Remove a UI-saved connector configuration (env vars, if any, take over)."""
+    _get_connector_class(source_name)
+    db.delete_source_config(source_name)
+    logger.info(f"Source '{source_name}' configuration removed by {user['username']}")
+    return {"deleted": source_name}
+
+
+@app.post("/sources/{source_name}/test")
+async def test_source(
+    source_name: str,
+    user: Dict[str, Any] = Depends(require_certifier),
+) -> dict:
+    """Test the current configuration by listing remote documents."""
+    import asyncio as _asyncio
+
+    from orchestrator.sync import get_source
+
+    _get_connector_class(source_name)
+    src = get_source(source_name)
+    if src is None:
+        raise HTTPException(status_code=400, detail="Sorgente non configurata")
+
+    try:
+        docs = await _asyncio.to_thread(src.list_remote)
+        return {"ok": True, "documents_found": len(docs)}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:300]}
+
+
 @app.post("/sources/sync")
 async def sync_sources(
     background_tasks: BackgroundTasks,

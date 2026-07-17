@@ -44,6 +44,13 @@ def _slugify(title: str) -> str:
 class ConfluenceSource(DocumentSource):
     name = "confluence"
 
+    CONFIG_FIELDS = [
+        {"key": "base_url", "label": "URL del sito (https://azienda.atlassian.net)", "secret": False, "required": True},
+        {"key": "space", "label": "Chiave dello spazio (es. COMP)", "secret": False, "required": True},
+        {"key": "email", "label": "Email account Atlassian", "secret": False, "required": True},
+        {"key": "api_token", "label": "API token (id.atlassian.com)", "secret": True, "required": True},
+    ]
+
     def __init__(self, base_url: str, space: str, email: str, api_token: str):
         self.base_url = base_url.rstrip("/")
         self.space = space
@@ -56,6 +63,16 @@ class ConfluenceSource(DocumentSource):
         space = os.getenv("CONFLUENCE_SPACE", "").strip()
         email = os.getenv("CONFLUENCE_EMAIL", "").strip()
         token = os.getenv("CONFLUENCE_API_TOKEN", "").strip()
+        if not (url and space and email and token):
+            return None
+        return cls(url, space, email, token)
+
+    @classmethod
+    def from_config(cls, config: dict) -> Optional["ConfluenceSource"]:
+        url = (config.get("base_url") or "").strip()
+        space = (config.get("space") or "").strip()
+        email = (config.get("email") or "").strip()
+        token = (config.get("api_token") or "").strip()
         if not (url and space and email and token):
             return None
         return cls(url, space, email, token)

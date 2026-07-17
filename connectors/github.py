@@ -30,6 +30,13 @@ _SUPPORTED_EXT = (".md", ".txt", ".rst", ".text", ".pdf")
 class GitHubSource(DocumentSource):
     name = "github"
 
+    CONFIG_FIELDS = [
+        {"key": "token", "label": "Personal Access Token (contenuti: sola lettura)", "secret": True, "required": True},
+        {"key": "repo", "label": "Repository (owner/nome)", "secret": False, "required": True},
+        {"key": "branch", "label": "Branch (vuoto = default del repo)", "secret": False, "required": False},
+        {"key": "path_prefix", "label": "Percorso da sincronizzare (es. docs/)", "secret": False, "required": False},
+    ]
+
     def __init__(self, token: str, repo: str, branch: str = "", path_prefix: str = ""):
         self.token = token
         self.repo = repo
@@ -47,6 +54,19 @@ class GitHubSource(DocumentSource):
             repo=repo,
             branch=os.getenv("GITHUB_BRANCH", "").strip(),
             path_prefix=os.getenv("GITHUB_PATH", "").strip(),
+        )
+
+    @classmethod
+    def from_config(cls, config: dict) -> Optional["GitHubSource"]:
+        token = (config.get("token") or "").strip()
+        repo = (config.get("repo") or "").strip()
+        if not token or not repo:
+            return None
+        return cls(
+            token=token,
+            repo=repo,
+            branch=(config.get("branch") or "").strip(),
+            path_prefix=(config.get("path_prefix") or "").strip(),
         )
 
     def _headers(self) -> dict:

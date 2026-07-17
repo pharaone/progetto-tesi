@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import List
+from typing import List, Optional
 
 from connectors.base import DocumentSource
 from connectors.confluence import ConfluenceSource
@@ -29,11 +29,34 @@ logger = logging.getLogger(__name__)
 ALL_CONNECTORS = [GitHubSource, ConfluenceSource]
 
 
+def build_source(cls) -> tuple:
+    """Instantiate one connector: UI-saved config first, env vars as fallback.
+
+    Returns (source_or_None, origin) where origin is "ui" | "env" | None.
+    """
+    config = db.get_source_config(cls.name)
+    if config:
+        src = cls.from_config(config)
+        if src is not None:
+            return src, "ui"
+    src = cls.from_env()
+    if src is not None:
+        return src, "env"
+    return None, None
+
+
+def get_source(name: str) -> Optional[DocumentSource]:
+    for cls in ALL_CONNECTORS:
+        if cls.name == name:
+            return build_source(cls)[0]
+    return None
+
+
 def configured_sources() -> List[DocumentSource]:
-    """Instantiate every connector whose env configuration is present."""
+    """Instantiate every configured connector (UI config or env)."""
     sources = []
     for cls in ALL_CONNECTORS:
-        src = cls.from_env()
+        src, _ = build_source(cls)
         if src is not None:
             sources.append(src)
     return sources
@@ -42,12 +65,13 @@ def configured_sources() -> List[DocumentSource]:
 def source_overview() -> List[dict]:
     """Configuration + last sync state for every known connector."""
     states = db.get_sync_states()
-    configured = {s.name for s in configured_sources()}
     overview = []
     for cls in ALL_CONNECTORS:
+        src, origin = build_source(cls)
         overview.append({
             "name": cls.name,
-            "configured": cls.name in configured,
+            "configured": src is not None,
+            "config_origin": origin,
             "last_sync": states.get(cls.name),
         })
     return overview

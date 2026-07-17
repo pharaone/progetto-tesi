@@ -764,15 +764,23 @@ def render_external_sources_section() -> None:
         return
 
     configured = [s for s in sources if s["configured"]]
+    is_certifier = st.session_state.role == "certifier"
 
     st.markdown("#### :material/cloud_sync: Sorgenti esterne")
     if not configured:
-        st.caption(
-            "Nessuna sorgente esterna configurata. Imposta le variabili "
-            "GITHUB_TOKEN/GITHUB_REPO oppure CONFLUENCE_URL/CONFLUENCE_SPACE/"
-            "CONFLUENCE_EMAIL/CONFLUENCE_API_TOKEN nel file .env per sincronizzare "
-            "la documentazione aziendale da GitHub o Confluence."
-        )
+        if is_certifier:
+            st.caption(
+                "Nessuna sorgente esterna configurata: usa il pannello qui sotto "
+                "per collegare GitHub o Confluence."
+            )
+        else:
+            st.caption(
+                "Nessuna sorgente esterna configurata. Il certificatore può "
+                "collegare GitHub o Confluence dalla propria sezione Documenti."
+            )
+        if is_certifier:
+            render_source_config_panel()
+            st.divider()
         return
 
     any_running = False
@@ -823,7 +831,104 @@ def render_external_sources_section() -> None:
             "i documenti eliminati a monte vengono rimossi dal corpus."
         )
 
+    if is_certifier:
+        render_source_config_panel()
+
     st.divider()
+
+
+def render_source_config_panel() -> None:
+    """Certifier-only: configure GitHub/Confluence directly from the UI.
+
+    Secret fields are write-only: the server never returns stored tokens,
+    and leaving a secret field empty on save keeps the stored value.
+    """
+    configs = api_get("/sources/config")
+    if configs is None:
+        return
+
+    with st.expander("Configura sorgenti (GitHub / Confluence)", expanded=False):
+        st.caption(
+            "Le credenziali sono salvate nel database dell'istanza e hanno "
+            "priorità sulle variabili d'ambiente. I token non vengono mai "
+            "mostrati: lascia vuoto il campo per mantenere quello salvato."
+        )
+
+        for cfg in configs:
+            name = cfg["name"]
+            label = _SOURCE_LABELS.get(name, name)
+            origin = cfg.get("config_origin")
+            origin_note = {
+                "ui": "configurata da interfaccia",
+                "env": "configurata da variabili d'ambiente (.env)",
+                None: "non configurata",
+            }[origin]
+
+            st.markdown(f"**{label}** — `{origin_note}`")
+
+            with st.form(f"srccfg_{name}"):
+                submitted_values = {}
+                for field in cfg["fields"]:
+                    key = field["key"]
+                    stored = cfg["values"].get(key, {})
+                    if field["secret"]:
+                        placeholder = (
+                            "•••••••• (impostato — lascia vuoto per mantenere)"
+                            if stored.get("set") else ""
+                        )
+                        submitted_values[key] = st.text_input(
+                            field["label"],
+                            type="password",
+                            placeholder=placeholder,
+                            key=f"srccfg_{name}_{key}",
+                        )
+                    else:
+                        submitted_values[key] = st.text_input(
+                            field["label"],
+                            value=stored.get("value", ""),
+                            key=f"srccfg_{name}_{key}",
+                        )
+                saved = st.form_submit_button("Salva configurazione", type="primary")
+
+            if saved:
+                result = api_post_put(f"/sources/{name}/config", submitted_values)
+                if result:
+                    st.success(f"Configurazione {label} salvata.")
+                    st.rerun()
+
+            col_test, col_remove, _ = st.columns([1, 1, 2])
+            with col_test:
+                if st.button("Prova connessione", key=f"srctest_{name}"):
+                    with st.spinner("Verifica in corso..."):
+                        result = api_post(f"/sources/{name}/test")
+                    if result:
+                        if result.get("ok"):
+                            st.success(f"Connessione OK — {result.get('documents_found')} documenti trovati.")
+                        else:
+                            st.error(f"Connessione fallita: {result.get('error')}")
+            with col_remove:
+                if origin == "ui" and st.button("Rimuovi", key=f"srcdel_{name}"):
+                    if api_delete(f"/sources/{name}/config"):
+                        st.warning(f"Configurazione {label} rimossa.")
+                        st.rerun()
+
+            st.divider()
+
+
+def api_post_put(path: str, json_body: dict, timeout: float = 30.0):
+    """PUT helper (api_post is POST-only)."""
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.put(
+                f"{ORCHESTRATOR_URL}{path}", json=json_body, headers=_auth_headers()
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as exc:
+        _show_http_error(exc)
+    except Exception as exc:
+        st.error(f"Errore: {exc}")
+    return None
 
 
 def render_documents_section(can_upload: bool) -> None:

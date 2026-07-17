@@ -90,6 +90,11 @@ def init_db() -> None:
                 detail        TEXT,
                 last_sync_at  TEXT
             );
+            CREATE TABLE IF NOT EXISTS source_config (
+                source       TEXT PRIMARY KEY,
+                config_json  TEXT NOT NULL,
+                updated_at   TEXT NOT NULL
+            );
             """
         )
         # Idempotent migrations for databases created by earlier versions
@@ -256,6 +261,38 @@ def get_sync_states() -> Dict[str, Dict[str, Any]]:
     with _lock:
         rows = _get_conn().execute("SELECT * FROM sync_state").fetchall()
     return {r["source"]: dict(r) for r in rows}
+
+
+def get_source_config(source: str) -> Optional[Dict[str, Any]]:
+    with _lock:
+        row = _get_conn().execute(
+            "SELECT config_json FROM source_config WHERE source = ?", (source,)
+        ).fetchone()
+    if row is None:
+        return None
+    try:
+        return json.loads(row["config_json"])
+    except json.JSONDecodeError:
+        return None
+
+
+def set_source_config(source: str, config: Dict[str, Any]) -> None:
+    with _lock:
+        conn = _get_conn()
+        conn.execute(
+            "INSERT INTO source_config (source, config_json, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(source) DO UPDATE SET config_json = ?, updated_at = ?",
+            (source, json.dumps(config), _now(), json.dumps(config), _now()),
+        )
+        conn.commit()
+
+
+def delete_source_config(source: str) -> bool:
+    with _lock:
+        conn = _get_conn()
+        cur = conn.execute("DELETE FROM source_config WHERE source = ?", (source,))
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def is_sync_running() -> bool:

@@ -29,12 +29,25 @@ class DocumentSource(ABC):
 
     name: str = "base"
 
+    # Describes the configuration form: [{key, label, secret, required}].
+    # Used by the UI to render per-source settings and by the API to mask
+    # secret values.
+    CONFIG_FIELDS: list = []
+
     @classmethod
     @abstractmethod
     def from_env(cls) -> Optional["DocumentSource"]:
         """Build the connector from environment variables.
 
         Returns None when the source is not configured.
+        """
+
+    @classmethod
+    @abstractmethod
+    def from_config(cls, config: dict) -> Optional["DocumentSource"]:
+        """Build the connector from a stored configuration dict.
+
+        Returns None when required fields are missing.
         """
 
     @abstractmethod
