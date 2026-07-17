@@ -251,6 +251,8 @@ services:
     environment:
       - ORCHESTRATOR_URL=http://orchestrator:8000
       - AIU_URL=http://aiu:8005
+      # Dump native stack traces on segfaults instead of dying silently
+      - PYTHONFAULTHANDLER=1
     depends_on:
       orchestrator:
         condition: service_healthy
