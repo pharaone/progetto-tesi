@@ -91,6 +91,15 @@ class GitHubSource(DocumentSource):
                 params={"recursive": "1"},
                 headers=self._headers(),
             )
+            # GitHub answers 409 Conflict for a repository with no commits
+            if resp.status_code == 409:
+                logger.warning(f"GitHub {self.repo}: repository is empty, nothing to sync")
+                return []
+            if resp.status_code == 404:
+                raise RuntimeError(
+                    f"Branch '{branch}' non trovato nel repository {self.repo} "
+                    f"(o il token non ha accesso ai contenuti)"
+                )
             resp.raise_for_status()
             tree = resp.json().get("tree", [])
 
