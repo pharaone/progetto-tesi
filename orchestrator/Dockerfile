@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy shared modules
 COPY shared/ /app/shared/
 COPY rag/ /app/rag/
+COPY connectors/ /app/connectors/
 
 # Copy orchestrator code
 COPY orchestrator/__init__.py /app/orchestrator/__init__.py

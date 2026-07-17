@@ -82,11 +82,27 @@ def init_db() -> None:
             );
             """
         )
-        # Migration for databases created before the async job pattern
-        try:
-            conn.execute("ALTER TABLE reports ADD COLUMN error TEXT")
-        except sqlite3.OperationalError:
-            pass  # column already exists
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS sync_state (
+                source        TEXT PRIMARY KEY,
+                status        TEXT NOT NULL,
+                detail        TEXT,
+                last_sync_at  TEXT
+            );
+            """
+        )
+        # Idempotent migrations for databases created by earlier versions
+        for ddl in (
+            "ALTER TABLE reports ADD COLUMN error TEXT",
+            "ALTER TABLE documents ADD COLUMN source TEXT NOT NULL DEFAULT 'upload'",
+            "ALTER TABLE documents ADD COLUMN external_id TEXT",
+            "ALTER TABLE documents ADD COLUMN version_hash TEXT",
+        ):
+            try:
+                conn.execute(ddl)
+            except sqlite3.OperationalError:
+                pass  # column already exists
         conn.commit()
 
     # Seed the certifier account (idempotent)
@@ -130,23 +146,36 @@ def create_user(username: str, password: str, role: str = ROLE_EMPLOYEE) -> Dict
 # Documents
 # ---------------------------------------------------------------------------
 
-def add_document(filename: str, uploader: str, content: str) -> int:
+def add_document(
+    filename: str,
+    uploader: str,
+    content: str,
+    source: str = "upload",
+    external_id: Optional[str] = None,
+    version_hash: Optional[str] = None,
+) -> int:
     with _lock:
         conn = _get_conn()
         cur = conn.execute(
-            "INSERT INTO documents (filename, uploader, content, uploaded_at) VALUES (?, ?, ?, ?)",
-            (filename, uploader, content, _now()),
+            "INSERT INTO documents (filename, uploader, content, uploaded_at, source, external_id, version_hash) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (filename, uploader, content, _now(), source, external_id, version_hash),
         )
         conn.commit()
         return int(cur.lastrowid)
 
 
 def list_documents(uploader: Optional[str] = None) -> List[Dict[str, Any]]:
-    """List document metadata. Filter by uploader for employees; None = all (certifier)."""
-    sql = "SELECT id, filename, uploader, uploaded_at FROM documents"
+    """List document metadata.
+
+    Employees (uploader given) see their own uploads PLUS all synced
+    documents (company-wide by design — they have no individual owner).
+    Certifier (uploader=None) sees everything.
+    """
+    sql = "SELECT id, filename, uploader, uploaded_at, source FROM documents"
     params: tuple = ()
     if uploader is not None:
-        sql += " WHERE uploader = ?"
+        sql += " WHERE uploader = ? OR source != 'upload'"
         params = (uploader,)
     sql += " ORDER BY uploaded_at DESC"
     with _lock:
@@ -184,6 +213,57 @@ def delete_document(doc_id: int, uploader: Optional[str] = None) -> bool:
         cur = conn.execute(sql, params)
         conn.commit()
         return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Synced documents (external sources: GitHub, Confluence, ...)
+# ---------------------------------------------------------------------------
+
+def get_synced_documents(source: str) -> List[Dict[str, Any]]:
+    """All documents previously synced from a given external source."""
+    with _lock:
+        rows = _get_conn().execute(
+            "SELECT id, filename, external_id, version_hash FROM documents WHERE source = ?",
+            (source,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_synced_document(
+    doc_id: int, filename: str, content: str, version_hash: str
+) -> None:
+    with _lock:
+        conn = _get_conn()
+        conn.execute(
+            "UPDATE documents SET filename = ?, content = ?, version_hash = ?, uploaded_at = ? WHERE id = ?",
+            (filename, content, version_hash, _now(), doc_id),
+        )
+        conn.commit()
+
+
+def set_sync_state(source: str, status: str, detail: str = "") -> None:
+    with _lock:
+        conn = _get_conn()
+        conn.execute(
+            "INSERT INTO sync_state (source, status, detail, last_sync_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(source) DO UPDATE SET status = ?, detail = ?, last_sync_at = ?",
+            (source, status, detail, _now(), status, detail, _now()),
+        )
+        conn.commit()
+
+
+def get_sync_states() -> Dict[str, Dict[str, Any]]:
+    with _lock:
+        rows = _get_conn().execute("SELECT * FROM sync_state").fetchall()
+    return {r["source"]: dict(r) for r in rows}
+
+
+def is_sync_running() -> bool:
+    with _lock:
+        row = _get_conn().execute(
+            "SELECT 1 FROM sync_state WHERE status = 'RUNNING' LIMIT 1"
+        ).fetchone()
+    return row is not None
 
 
 # ---------------------------------------------------------------------------

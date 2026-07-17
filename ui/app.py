@@ -701,7 +701,85 @@ def render_report_list_and_detail(
 # Documents section
 # ---------------------------------------------------------------------------
 
+_SOURCE_LABELS = {
+    "upload": "Caricamento manuale",
+    "github": "GitHub",
+    "confluence": "Confluence",
+}
+
+
+def render_external_sources_section() -> None:
+    """External documentation sources (GitHub / Confluence) with on-demand sync."""
+    sources = api_get("/sources")
+    if sources is None:
+        return
+
+    configured = [s for s in sources if s["configured"]]
+
+    st.markdown("#### :material/cloud_sync: Sorgenti esterne")
+    if not configured:
+        st.caption(
+            "Nessuna sorgente esterna configurata. Imposta le variabili "
+            "GITHUB_TOKEN/GITHUB_REPO oppure CONFLUENCE_URL/CONFLUENCE_SPACE/"
+            "CONFLUENCE_EMAIL/CONFLUENCE_API_TOKEN nel file .env per sincronizzare "
+            "la documentazione aziendale da GitHub o Confluence."
+        )
+        return
+
+    any_running = False
+    for s in configured:
+        last = s.get("last_sync") or {}
+        status = last.get("status")
+        ts = (last.get("last_sync_at") or "")[:19].replace("T", " ")
+        label = _SOURCE_LABELS.get(s["name"], s["name"])
+
+        cols = st.columns([2, 2, 6], vertical_alignment="center")
+        cols[0].markdown(f"**{label}**")
+        if status == "RUNNING":
+            any_running = True
+            cols[1].markdown(":material/sync: `in corso`")
+            cols[2].caption("Sincronizzazione in corso...")
+        elif status in ("OK", "PARTIAL"):
+            icon = ":material/check_circle:" if status == "OK" else ":material/warning:"
+            cols[1].markdown(f"{icon} `{status}`")
+            try:
+                import json as _json
+                detail = _json.loads(last.get("detail") or "{}")
+                cols[2].caption(
+                    f"Ultima sync: {ts} — {detail.get('added', 0)} nuovi, "
+                    f"{detail.get('updated', 0)} aggiornati, "
+                    f"{detail.get('unchanged', 0)} invariati, "
+                    f"{detail.get('removed', 0)} rimossi"
+                    + (f", {len(detail.get('errors', []))} errori" if detail.get("errors") else "")
+                )
+            except Exception:
+                cols[2].caption(f"Ultima sync: {ts}")
+        elif status == "ERROR":
+            cols[1].markdown(":material/error: `errore`")
+            cols[2].caption(f"{ts} — {last.get('detail', '')[:150]}")
+        else:
+            cols[1].markdown("`mai eseguita`")
+            cols[2].caption("Nessuna sincronizzazione eseguita finora.")
+
+    col_btn, col_note = st.columns([1, 3], vertical_alignment="center")
+    with col_btn:
+        if st.button("Sincronizza ora", type="primary", disabled=any_running):
+            result = api_post("/sources/sync")
+            if result:
+                st.success(result.get("message", "Sincronizzazione avviata."))
+                st.rerun()
+    with col_note:
+        st.caption(
+            "Scarica i documenti nuovi o modificati e li indicizza in background; "
+            "i documenti eliminati a monte vengono rimossi dal corpus."
+        )
+
+    st.divider()
+
+
 def render_documents_section(can_upload: bool) -> None:
+    render_external_sources_section()
+
     if can_upload:
         st.markdown("#### :material/upload_file: Carica documenti")
         uploaded_files = st.file_uploader(
@@ -746,11 +824,19 @@ def render_documents_section(can_upload: bool) -> None:
         return
 
     for doc in docs:
+        source = doc.get("source", "upload")
         cols = st.columns([4, 2, 2, 1], vertical_alignment="center")
-        cols[0].markdown(f":material/description: **{doc['filename']}**")
-        cols[1].caption(f"Caricato da: {doc['uploader']}")
+        icon = ":material/description:" if source == "upload" else ":material/cloud_download:"
+        cols[0].markdown(f"{icon} **{doc['filename']}**")
+        if source == "upload":
+            cols[1].caption(f"Caricato da: {doc['uploader']}")
+        else:
+            cols[1].caption(f"Sorgente: {_SOURCE_LABELS.get(source, source)}")
         cols[2].caption(doc["uploaded_at"][:19])
-        if cols[3].button("Elimina", key=f"del_doc_{doc['id']}", help="Elimina documento"):
+        # Synced docs are managed by the sync (deleting them here would just
+        # bring them back on the next run) — only the certifier can force it
+        can_delete = source == "upload" or st.session_state.role == "certifier"
+        if can_delete and cols[3].button("Elimina", key=f"del_doc_{doc['id']}", help="Elimina documento"):
             if api_delete(f"/documents/{doc['id']}"):
                 st.rerun()
 

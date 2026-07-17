@@ -83,6 +83,10 @@ async def startup() -> None:
     stale = db.fail_stale_running_reports()
     if stale:
         logger.warning(f"Marked {stale} stale RUNNING report(s) as FAILED after restart")
+    # Sync jobs die with the process too
+    for source, state in db.get_sync_states().items():
+        if state.get("status") == "RUNNING":
+            db.set_sync_state(source, "ERROR", "Interrotta dal riavvio del sistema")
 
 
 # ---------------------------------------------------------------------------
@@ -256,6 +260,46 @@ async def delete_document(
         logger.warning(f"Failed to purge RAG chunks for '{doc['filename']}': {exc}")
 
     return {"deleted": doc_id}
+
+
+# ---------------------------------------------------------------------------
+# External documentation sources (GitHub / Confluence sync)
+# ---------------------------------------------------------------------------
+
+@app.get("/sources")
+async def get_sources(user: Dict[str, Any] = Depends(get_current_user)) -> List[dict]:
+    """Known connectors, whether they are configured, and their last sync."""
+    from orchestrator.sync import source_overview
+    return source_overview()
+
+
+@app.post("/sources/sync")
+async def sync_sources(
+    background_tasks: BackgroundTasks,
+    user: Dict[str, Any] = Depends(get_current_user),
+) -> dict:
+    """Start an on-demand incremental sync of all configured sources.
+
+    Runs in the background; progress and results are visible via
+    GET /sources (per-source status: RUNNING / OK / PARTIAL / ERROR).
+    """
+    from orchestrator.sync import configured_sources, run_full_sync
+
+    if not configured_sources():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No external source configured. Set GITHUB_TOKEN/GITHUB_REPO "
+                "and/or CONFLUENCE_URL/CONFLUENCE_SPACE/CONFLUENCE_EMAIL/"
+                "CONFLUENCE_API_TOKEN in .env."
+            ),
+        )
+    if db.is_sync_running():
+        raise HTTPException(status_code=409, detail="A sync is already running.")
+
+    background_tasks.add_task(run_full_sync)
+    logger.info(f"External sources sync started by {user['username']}")
+    return {"message": "Sincronizzazione avviata in background."}
 
 
 # ---------------------------------------------------------------------------
