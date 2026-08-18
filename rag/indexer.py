@@ -1,10 +1,22 @@
 """Document indexer for ISO/IEC 42001 gap analysis system.
 
-Handles PDF and TXT files using RecursiveCharacterTextSplitter.
-Uses sentence-transformers all-MiniLM-L6-v2 via ChromaDB embedding function.
+Handles PDF and TXT files. Uses the ONNX all-MiniLM-L6-v2 embedding
+function provided by ChromaDB.
 
-ISO documents are indexed with a requirement_id metadata field extracted
-from clause/control headings (e.g. "4.1 ..." → "cl-4.1", "A.5.3 ..." → "A.5.3").
+ISO documents are indexed **requirement-first**: the raw text is segmented
+at every clause/control heading (one requirement = one segment) BEFORE the
+generic text splitter runs, and the splitter only breaks up segments that
+are still longer than CHUNK_SIZE. Every chunk therefore carries the
+requirement_id of the heading it belongs to (e.g. "4.1 ..." → "cl-4.1",
+"A.5.3 ..." → "A.5.3").
+
+Segmenting first is what guarantees one evaluation card per requirement:
+chunking first and tagging afterwards assigned a single id per chunk, so a
+512-character chunk spanning several short headings (typical of the Annex A
+control table) silently swallowed all but the first requirement — those
+requirements never became a group in requirements_loader and were never
+evaluated.
+
 Organizational documents are indexed without requirement_id.
 """
 
@@ -30,15 +42,26 @@ logger = logging.getLogger(__name__)
 CHUNK_SIZE = 512
 CHUNK_OVERLAP = 64
 
-# Regex patterns for ISO clause/control headings.
-# Allow optional leading whitespace (tabs/spaces) because PDF-extracted text
-# often indents headings slightly while still placing them at the start of a line.
-_ANNEX_HEADING = re.compile(r"^[ \t]*A\.(\d+)\.(\d+)(?:\.(\d+))?(?=\s|$)", re.MULTILINE)
-_CLAUSE_HEADING = re.compile(r"^[ \t]*(\d{1,2})\.(\d+)(?:\.(\d+))?(?=\s|$)", re.MULTILINE)
+# Every ISO heading that can start a segment, matched at the start of a line.
+# Leading whitespace is allowed because PDF-extracted text often indents
+# headings slightly. Alternatives are ordered longest-first so that "A.6.2.3"
+# is not truncated to "A.6.2" and "6.1.2" is not truncated to "6.1".
+_HEADING = re.compile(
+    r"^[ \t]*"
+    r"(?P<num>"
+    r"A\.\d{1,2}(?:\.\d{1,2}){1,2}"       # A.4.3 / A.6.2.3  → Annex A control
+    r"|A\.\d{1,2}"                        # A.4              → Annex A section title
+    r"|(?:10|[4-9])\.\d{1,2}(?:\.\d{1,2})?"  # 8.3 / 6.1.2   → clause requirement
+    r"|(?:10|[4-9])"                      # 5                → clause title
+    r")"
+    r"(?=[ \t]|$)"
+    r"(?P<rest>[^\n]*)",
+    re.MULTILINE,
+)
 
 # Table-of-contents lines use long dot leaders ("5.1 Leadership.......... 42").
-# They match the heading regexes and would tag TOC chunks with requirement_ids,
-# polluting requirement text with TOC junk — strip them before chunking.
+# They match the heading regex and would create bogus requirement segments
+# full of TOC junk — strip them before segmenting.
 _TOC_LINE = re.compile(r"^.*\.{5,}.*$", re.MULTILINE)
 
 
@@ -49,24 +72,69 @@ def _strip_toc_lines(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", stripped)
 
 
-def _extract_requirement_id(text: str) -> str:
-    """Extract the primary ISO requirement ID from a text chunk.
+def _looks_like_section_title(rest: str) -> bool:
+    """Heuristic: does the text after a bare number look like a section title?
 
-    Checks for Annex A controls (A.x.y[.z]) first, then main clause
-    subsections (4.1 – 10.2). Returns empty string if none found.
+    Guards the bare-number alternatives ("5 Leadership", "A.4 Resources")
+    against false positives such as page numbers on their own line or a
+    sentence that happens to start with a figure.
     """
-    m = _ANNEX_HEADING.search(text)
-    if m:
-        a, b, c = m.group(1), m.group(2), m.group(3)
-        return f"A.{a}.{b}.{c}" if c else f"A.{a}.{b}"
+    title = rest.strip()
+    if not title or len(title) > 80:
+        return False
+    if title[-1] in ".;,:":
+        return False
+    return title[0].isalpha()
 
-    m = _CLAUSE_HEADING.search(text)
-    if m:
-        major, minor, sub = m.group(1), m.group(2), m.group(3)
-        if 4 <= int(major) <= 10:
-            return f"cl-{major}.{minor}.{sub}" if sub else f"cl-{major}.{minor}"
 
-    return ""
+def _classify_heading(num: str, rest: str) -> Optional[str]:
+    """Map a heading match to the requirement it opens.
+
+    Returns the requirement_id, "" for a section boundary that is not itself
+    a requirement (a clause/annex title), or None when the match should be
+    ignored altogether.
+    """
+    if num.startswith("A."):
+        # A.x.y[.z] is a control; a bare A.x is just the family title
+        if num.count(".") >= 2:
+            return num
+        return "" if _looks_like_section_title(rest) else None
+
+    if "." in num:
+        return f"cl-{num}"
+
+    # Bare clause number: a title line such as "5 Leadership"
+    return "" if _looks_like_section_title(rest) else None
+
+
+def segment_by_requirement(text: str) -> List[Tuple[str, str]]:
+    """Split raw ISO text into (requirement_id, segment_text) pairs.
+
+    Each segment runs from one heading to the next, so a requirement's text
+    is never merged into the previous one. Text before the first heading is
+    kept as a segment with an empty requirement_id.
+    """
+    boundaries: List[Tuple[int, str]] = []
+    for match in _HEADING.finditer(text):
+        requirement_id = _classify_heading(match.group("num"), match.group("rest"))
+        if requirement_id is None:
+            continue
+        boundaries.append((match.start(), requirement_id))
+
+    segments: List[Tuple[str, str]] = []
+
+    preamble = text[: boundaries[0][0]] if boundaries else text
+    if preamble.strip():
+        segments.append(("", preamble))
+
+    for i, (start, requirement_id) in enumerate(boundaries):
+        end = boundaries[i + 1][0] if i + 1 < len(boundaries) else len(text)
+        segment = text[start:end]
+        if segment.strip():
+            segments.append((requirement_id, segment))
+
+    return segments
+
 
 _text_splitter: Optional[RecursiveCharacterTextSplitter] = None
 
@@ -193,13 +261,39 @@ def index_iso_document(file_path: str, collection_name: str) -> int:
 
     text = _strip_toc_lines(text)
 
-    chunks, metadatas = _chunk_text(
-        text, file_path, extra_metadata={"collection": collection_name, "type": "iso"}
-    )
+    # Requirement-first: cut at every heading, then split only the segments
+    # that are still too long for a single embedding
+    segments = segment_by_requirement(text)
+    splitter = _get_splitter()
+    filename = Path(file_path).name
 
-    # Enrich each chunk's metadata with the requirement_id it belongs to
-    for meta, chunk in zip(metadatas, chunks):
-        meta["requirement_id"] = _extract_requirement_id(chunk)
+    chunks: List[str] = []
+    metadatas: List[dict] = []
+
+    for requirement_id, segment in segments:
+        parts = splitter.split_text(segment) if len(segment) > CHUNK_SIZE else [segment]
+        for part in parts:
+            if not part.strip():
+                continue
+            metadatas.append(
+                {
+                    "source": filename,
+                    # Global position: keeps a requirement's parts in document
+                    # order when requirements_loader regroups them
+                    "chunk_index": len(chunks),
+                    "requirement_id": requirement_id,
+                    "collection": collection_name,
+                    "type": "iso",
+                }
+            )
+            chunks.append(part)
+
+    if not chunks:
+        logger.warning(f"No indexable content in {filename}")
+        return 0
+
+    for meta in metadatas:
+        meta["total_chunks"] = len(chunks)
 
     ids = [
         _make_chunk_id(file_path, i, prefix="iso_")
@@ -207,10 +301,11 @@ def index_iso_document(file_path: str, collection_name: str) -> int:
     ]
 
     add_documents(collection_name, chunks, metadatas, ids)
-    tagged = sum(1 for m in metadatas if m.get("requirement_id"))
+
+    requirements = {m["requirement_id"] for m in metadatas if m["requirement_id"]}
     logger.info(
-        f"Indexed {len(chunks)} chunks ({tagged} with requirement_id) "
-        f"from {Path(file_path).name} into '{collection_name}'"
+        f"Indexed {len(chunks)} chunks covering {len(requirements)} requirements "
+        f"from {filename} into '{collection_name}'"
     )
     return len(chunks)
 
