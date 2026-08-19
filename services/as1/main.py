@@ -46,7 +46,10 @@ from rag.collections import (
     query as rag_query,
     query_iso_with_fallback,
 )
-from rag.requirements_loader import load_requirements_from_rag
+from rag.requirements_loader import (
+    load_requirements_from_rag,
+    strip_informative_notes,
+)
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
@@ -263,7 +266,9 @@ def _evaluate_requirement(
 
     prompt_text = EVALUATION_PROMPT.format(
         requirement_id=requirement["id"],
-        requirement_text=requirement["text"],
+        # NOTE paragraphs are informative: keep them in the card for
+        # traceability, but never spend context window on them
+        requirement_text=strip_informative_notes(requirement["text"]),
         org_context=org_context or "No organizational documentation provided.",
         iso_context=iso_context or "No ISO standard context available.",
     )
@@ -306,7 +311,7 @@ def _retrieve_context(query_text: str, org_id: str) -> tuple[str, str, List[Dict
         org_results = rag_query(
             COLLECTION_ORG_DOCS,
             query_text,
-            n_results=5,
+            n_results=get_settings().ORG_CONTEXT_CHUNKS,
             where={"org_id": org_id} if org_id else None,
         )
     except Exception as exc:
@@ -315,7 +320,9 @@ def _retrieve_context(query_text: str, org_id: str) -> tuple[str, str, List[Dict
 
     # Query ISO-CL456 (falls back to ISO-FULL when partition is empty)
     try:
-        iso_results = query_iso_with_fallback(COLLECTION_ISO_CL456, query_text, n_results=3)
+        iso_results = query_iso_with_fallback(
+            COLLECTION_ISO_CL456, query_text, n_results=get_settings().ISO_CONTEXT_CHUNKS
+        )
     except Exception as exc:
         logger.warning(f"ISO-CL456 query failed: {exc}")
         iso_results = {"ids": [[]], "documents": [[]], "metadatas": [[]], "distances": [[]]}

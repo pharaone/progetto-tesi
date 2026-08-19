@@ -22,6 +22,7 @@ from rag.indexer import (  # noqa: E402
     _strip_toc_lines,
     segment_by_requirement,
 )
+from rag.requirements_loader import strip_informative_notes  # noqa: E402
 
 
 def _as_dict(text: str) -> dict:
@@ -241,3 +242,31 @@ def test_parent_clause_with_its_own_obligation_is_kept():
     )
     segments = _as_dict(text)
     assert "cl-9.2" in segments and "cl-9.2.1" in segments
+
+
+# ---------------------------------------------------------------------------
+# ISO NOTE paragraphs are informative: they must not eat the context window
+# ---------------------------------------------------------------------------
+
+def test_informative_notes_are_stripped_from_the_prompt_text():
+    from rag.requirements_loader import strip_informative_notes
+
+    text = (
+        "4.1 Understanding the organization and its context\n\n"
+        "The organization shall determine external and internal issues.\n\n"
+        "NOTE 1 To understand the organization and its context, it can be helpful "
+        "to determine its role relative to the AI system.\n\n"
+        "The organization shall determine its roles with respect to these AI systems.\n\n"
+        "NOTE 2 External and internal issues can vary according to jurisdiction."
+    )
+    stripped = strip_informative_notes(text)
+
+    assert "NOTE" not in stripped
+    assert stripped.count("shall") == 2  # every obligation survives
+    assert len(stripped) < len(text)
+
+
+def test_stripping_notes_never_empties_a_requirement():
+    """A requirement made only of a NOTE keeps its text rather than vanishing."""
+    text = "NOTE Guidance is provided in ISO/IEC 23894."
+    assert strip_informative_notes(text) == text

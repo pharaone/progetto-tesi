@@ -8,11 +8,23 @@ a list of {"id": req_id, "text": combined_text} for use in agent loops.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Dict, List, Optional
 
 from rag.collections import COLLECTION_ISO_FULL, get_collection
 
 logger = logging.getLogger(__name__)
+
+# ISO NOTE paragraphs are informative, never normative. They make up most of
+# the length of some clauses (cl-4.1 is 42% notes) and push the real
+# obligations out of the model's context window.
+_NOTE_PARAGRAPH = re.compile(r"^\s*NOTE\b", re.IGNORECASE)
+
+
+def strip_informative_notes(text: str) -> str:
+    """Drop NOTE paragraphs, keeping only the normative requirement text."""
+    kept = [p for p in (text or "").split("\n\n") if not _NOTE_PARAGRAPH.match(p)]
+    return "\n\n".join(kept).strip() or (text or "").strip()
 
 
 def load_requirements_from_rag(

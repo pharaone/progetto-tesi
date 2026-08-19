@@ -24,6 +24,18 @@ class Settings:
     # Ollama settings
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "mistral:7b")
+    # Context window. Ollama defaults to 2048-4096 tokens and SILENTLY
+    # truncates anything longer: an evaluation prompt (requirement text +
+    # organizational context + ISO context + instructions) easily exceeds
+    # that, so the model would judge a requirement it never fully saw.
+    OLLAMA_NUM_CTX: int = int(os.getenv("OLLAMA_NUM_CTX", "8192"))
+
+    # How many organizational chunks to put in front of the model. The
+    # corpus of a single company is small (tens of chunks): retrieving only
+    # a handful starves the evaluation, especially because the ISO query is
+    # in English while the documents are usually not.
+    ORG_CONTEXT_CHUNKS: int = int(os.getenv("ORG_CONTEXT_CHUNKS", "12"))
+    ISO_CONTEXT_CHUNKS: int = int(os.getenv("ISO_CONTEXT_CHUNKS", "3"))
 
     # Anthropic settings
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
@@ -88,5 +100,6 @@ def get_llm(temperature: float = 0.0) -> Any:
         return ChatOllama(
             model=settings.OLLAMA_MODEL,
             base_url=settings.OLLAMA_BASE_URL,
+            num_ctx=settings.OLLAMA_NUM_CTX,
             temperature=temperature,
         )
