@@ -27,6 +27,7 @@ load_dotenv()
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from shared.config import get_llm, get_settings
+from shared.grounding import build_snippets, enforce_grounding
 from shared.metrics import REQUIREMENTS_EVALUATED, setup_metrics, track_llm_call
 from shared.models import (
     AnalyzeRequest,
@@ -102,12 +103,14 @@ Return ONLY a valid JSON object with these exact fields (no markdown, no extra t
 }}
 
 Rules:
-- If organizational documentation clearly addresses the requirement: verdict = CONFORME
-- If there is partial evidence or incomplete documentation: verdict = PARZIALMENTE_CONFORME
-- If no relevant documentation found or requirement clearly not met: verdict = NON_CONFORME
-- If the requirement is not applicable to this organization's context: verdict = NON_APPLICABILE
-- evidences must list actual excerpts from the provided context
-- If no relevant documentation found, set verdict = NON_APPLICABILE and note "evidences_insufficient" in gaps
+- SOURCE SEPARATION: "Organizational Documentation Context" is the ONLY evidence of what the organization actually does. "ISO Standard Context" states what the standard demands and is NEVER evidence of compliance — never cite it in "evidences".
+- VERBATIM EVIDENCE: every "excerpt" must be copied word-for-word from the Organizational Documentation Context. Do not paraphrase, translate, summarize or invent. Citations are verified automatically against the retrieved text and are discarded when they do not match.
+- PLANS ARE NOT COMPLIANCE: statements about intentions, roadmaps or future work ("will be established", "planned", "prossimi passi", "in fase di adeguamento", "non ancora") describe a gap, not compliance. Never use them to justify CONFORME.
+- CONFORME requires an explicit statement in the organizational documentation that satisfies EVERY obligation in the requirement text. If any sub-element is missing, vague or only planned, use PARZIALMENTE_CONFORME.
+- PARZIALMENTE_CONFORME requires at least one real, quotable excerpt that partially satisfies the requirement.
+- NON_CONFORME when the organizational documentation does not address the requirement, contains only document titles, headers or boilerplate with no substantive content, or clearly fails it. Missing documentation is a gap: use NON_CONFORME, not NON_APPLICABILE.
+- NON_APPLICABILE only when the requirement genuinely cannot apply to this organization (e.g. a control about third-party suppliers when the documentation states there are none). Justify it in "gaps".
+- If no relevant documentation is found, use NON_CONFORME and note "evidences_insufficient" in gaps.
 - Return ONLY the JSON object, nothing else
 """
 
@@ -130,20 +133,6 @@ def _format_rag_results(results: Dict[str, Any]) -> str:
         parts.append(f"[{i}] Source: {source} | ID: {doc_id}\n{doc[:800]}")
 
     return "\n\n---\n\n".join(parts)
-
-
-def _build_evidences(results: Dict[str, Any]) -> List[Evidence]:
-    docs = results.get("documents", [[]])[0]
-    metas = results.get("metadatas", [[]])[0]
-    ids = results.get("ids", [[]])[0]
-
-    evidences = []
-    for doc, meta, doc_id in zip(docs, metas, ids):
-        source = meta.get("source", "unknown") if meta else "unknown"
-        evidences.append(
-            Evidence(chunk_id=doc_id, source_doc=source, excerpt=doc[:300] if doc else "")
-        )
-    return evidences
 
 
 def _parse_llm_output(
@@ -235,6 +224,7 @@ def _evaluate_requirement(
     requirement: Dict[str, str],
     org_context: str,
     iso_context: str,
+    org_snippets: List[Dict[str, str]],
     input_hash: str,
 ) -> EvaluationCard:
     settings = get_settings()
@@ -276,10 +266,14 @@ def _evaluate_requirement(
             ),
         )
 
-    return _parse_llm_output(raw_output, requirement, [], input_hash, model_version)
+    card = _parse_llm_output(raw_output, requirement, [], input_hash, model_version)
+    # Independent safety net: keep only citations that really occur in the
+    # retrieved organizational documentation, and downgrade a positive
+    # verdict that is left without any verifiable evidence
+    return enforce_grounding(card, org_snippets, iso_context)
 
 
-def _retrieve_context(query_text: str, org_id: str) -> tuple[str, str, List[Evidence]]:
+def _retrieve_context(query_text: str, org_id: str) -> tuple[str, str, List[Dict[str, str]]]:
     try:
         org_results = rag_query(
             COLLECTION_ORG_DOCS,
@@ -300,9 +294,11 @@ def _retrieve_context(query_text: str, org_id: str) -> tuple[str, str, List[Evid
 
     org_context = _format_rag_results(org_results)
     iso_context = _format_rag_results(iso_results)
-    evidences = _build_evidences(org_results)
+    # Exactly what the model is shown, with the true chunk provenance,
+    # so its citations can be verified afterwards
+    org_snippets = build_snippets(org_results)
 
-    return org_context, iso_context, evidences
+    return org_context, iso_context, org_snippets
 
 
 # ---------------------------------------------------------------------------
@@ -356,12 +352,13 @@ async def analyze(request: AnalyzeRequest) -> List[EvaluationCard]:
         logger.info(f"Evaluating requirement {requirement['id']}")
         query_text = f"{requirement['id']} {requirement['text'][:200]}"
 
-        org_context, iso_context, _ = _retrieve_context(query_text, org_id)
+        org_context, iso_context, org_snippets = _retrieve_context(query_text, org_id)
 
         card = _evaluate_requirement(
             requirement=requirement,
             org_context=org_context,
             iso_context=iso_context,
+            org_snippets=org_snippets,
             input_hash=input_hash,
         )
         evaluation_cards.append(card)
