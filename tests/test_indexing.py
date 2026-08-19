@@ -183,3 +183,61 @@ def test_clause_ten_is_not_confused_with_clause_one():
     text = "10.1 Continual improvement\nThe organization shall continually improve.\n"
     segments = _as_dict(text)
     assert "cl-10.1" in segments
+
+
+# ---------------------------------------------------------------------------
+# Regressions found on a real report (see docs/): cross-references, informative
+# annexes and container headings
+# ---------------------------------------------------------------------------
+
+def test_cross_reference_at_line_start_is_not_a_heading():
+    """"...refers to in\\n4.1 and the requirements..." is a sentence, not 4.1."""
+    text = (
+        "6.1.1 General\n\n"
+        "When planning, the organization shall consider the issues referred to in\n"
+        "4.1 and the requirements referred to in 4.2 and determine the risks.\n"
+    )
+    segments = _as_dict(text)
+
+    assert list(segments) == ["cl-6.1.1"]
+    assert "determine the risks" in segments["cl-6.1.1"]
+
+
+def test_informative_annexes_do_not_extend_the_last_control():
+    """Annexes B/C/D must not be swallowed by the final Annex A control."""
+    text = (
+        "A.10.4 Customers\n"
+        "The organization shall ensure customer expectations are considered.\n\n"
+        "Annex B\n(normative)\nImplementation guidance\n\n"
+        "B.1 General\nThe implementation guidance relates to the controls.\n\n"
+        "C.2.1 Accountability\nThe use of AI can change accountability.\n"
+    )
+    segments = _as_dict(text)
+
+    assert [rid for rid in segments if rid] == ["A.10.4"]
+    assert "Implementation guidance" not in segments["A.10.4"]
+    assert "Accountability" not in segments["A.10.4"]
+    # B/C content stays indexed as context, just not as a requirement
+    assert any(not rid for rid, _ in segment_by_requirement(text))
+
+
+def test_container_heading_with_children_is_not_a_requirement():
+    """"6.1 Actions to address risks" states no obligation of its own."""
+    text = (
+        "6.1 Actions to address risks and opportunities\n\n"
+        "6.1.1 General\nThe organization shall consider the issues.\n\n"
+        "6.1.2 AI risk assessment\nThe organization shall define a process.\n"
+    )
+    segments = _as_dict(text)
+
+    assert "cl-6.1" not in segments
+    assert {rid for rid in segments if rid} == {"cl-6.1.1", "cl-6.1.2"}
+
+
+def test_parent_clause_with_its_own_obligation_is_kept():
+    text = (
+        "9.2 Internal audit\nThe organization shall conduct internal audits.\n\n"
+        "9.2.1 General\nThe organization shall plan the programme.\n"
+    )
+    segments = _as_dict(text)
+    assert "cl-9.2" in segments and "cl-9.2.1" in segments

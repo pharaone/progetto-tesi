@@ -12,6 +12,7 @@ from shared.grounding import (
     enforce_grounding,
     is_grounded_in,
     is_substantive,
+    states_absence_or_plan,
     verify_evidences,
 )
 from shared.models import (
@@ -231,3 +232,52 @@ def test_build_snippets_keeps_ids_and_truncation():
 
 def test_build_snippets_handles_empty_results():
     assert build_snippets({"ids": [[]], "documents": [[]], "metadatas": [[]]}) == []
+
+
+# ---------------------------------------------------------------------------
+# Evidence describing a gap or a plan cannot support compliance
+# ---------------------------------------------------------------------------
+
+GAP_TEXT = (
+    "Non è stato ancora istituito un Comitato di Governance IA né individuata la "
+    "figura di un AI Risk Officer: la creazione di questi ruoli è inserita tra le "
+    "azioni previste nella roadmap. Prossimi passi: Nexoria ha individuato le "
+    "seguenti azioni prioritarie per il percorso di adeguamento."
+)
+
+GAP_SNIPPETS = [
+    {"chunk_id": "org_chunk_5", "source_doc": "Linee_Guida_IA.pdf", "text": GAP_TEXT}
+]
+
+
+def test_absence_statement_is_recognised():
+    assert states_absence_or_plan("Non è stato ancora istituito un Comitato di Governance IA")
+    assert states_absence_or_plan("L'elenco è mantenuto dal Referente IT su base informale")
+    assert states_absence_or_plan("10. Prossimi passi Nexoria ha individuato le azioni prioritarie")
+
+
+def test_prohibition_is_not_mistaken_for_an_absence():
+    """A rule phrased in the negative is a real control, not a gap."""
+    assert not states_absence_or_plan(
+        "Non è consentito inserire dati riservati dei clienti negli strumenti di IA"
+    )
+
+
+def test_conforme_supported_only_by_a_gap_statement_is_downgraded():
+    card = _card(
+        Verdict.CONFORME,
+        [_evidence("Non è stato ancora istituito un Comitato di Governance IA né individuata la figura")],
+    )
+    card = enforce_grounding(card, GAP_SNIPPETS, ISO_TEXT)
+
+    assert card.verdict == Verdict.NON_CONFORME
+    assert any("pianificate o l'assenza" in gap for gap in card.gaps)
+
+
+def test_conforme_supported_only_by_a_roadmap_item_is_downgraded():
+    card = _card(
+        Verdict.CONFORME,
+        [_evidence("Prossimi passi: Nexoria ha individuato le seguenti azioni prioritarie per il percorso di adeguamento")],
+    )
+    card = enforce_grounding(card, GAP_SNIPPETS, ISO_TEXT)
+    assert card.verdict == Verdict.NON_CONFORME

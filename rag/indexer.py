@@ -51,6 +51,7 @@ _HEADING = re.compile(
     r"(?P<num>"
     r"A\.\d{1,2}(?:\.\d{1,2}){1,2}"       # A.4.3 / A.6.2.3  → Annex A control
     r"|A\.\d{1,2}"                        # A.4              → Annex A section title
+    r"|[B-Z]\.\d{1,2}(?:\.\d{1,2}){0,2}"  # B.6.2.3 / C.2.1  → informative annexes
     r"|(?:10|[4-9])\.\d{1,2}(?:\.\d{1,2})?"  # 8.3 / 6.1.2   → clause requirement
     r"|(?:10|[4-9])"                      # 5                → clause title
     r")"
@@ -58,6 +59,11 @@ _HEADING = re.compile(
     r"(?P<rest>[^\n]*)",
     re.MULTILINE,
 )
+
+# Annex openers and the bibliography close the last normative segment: without
+# them the final Annex A control would swallow the whole informative tail of
+# the standard (Annexes B, C, D and the bibliography).
+_ANNEX_OPENER = re.compile(r"^[ \t]*(?:Annex\s+[A-Z]\b|Bibliography\b)", re.MULTILINE)
 
 # Table-of-contents lines use long dot leaders ("5.1 Leadership.......... 42").
 # They match the heading regex and would create bogus requirement segments
@@ -87,24 +93,70 @@ def _looks_like_section_title(rest: str) -> bool:
     return title[0].isalpha()
 
 
+def _opens_a_titled_section(rest: str) -> bool:
+    """True when a numbered line actually introduces a heading.
+
+    ISO headings are followed by a capitalised title ("8.2 AI risk
+    assessment") or by nothing at all, because the Annex A table puts the
+    number on its own line. A lowercase continuation ("4.1 and the
+    requirements referred to in 4.2 ...") is a cross-reference inside a
+    sentence, not a heading — treating it as one used to split a
+    requirement in half and graft its tail onto an unrelated clause.
+    """
+    title = rest.strip()
+    return not title or title[0].isupper()
+
+
 def _classify_heading(num: str, rest: str) -> Optional[str]:
     """Map a heading match to the requirement it opens.
 
     Returns the requirement_id, "" for a section boundary that is not itself
-    a requirement (a clause/annex title), or None when the match should be
-    ignored altogether.
+    a requirement (a clause/annex title, informative annex), or None when
+    the match should be ignored altogether.
     """
+    # Annexes B onwards are informative guidance, never requirements
+    if num[0].isalpha() and not num.startswith("A"):
+        return "" if _opens_a_titled_section(rest) else None
+
     if num.startswith("A."):
         # A.x.y[.z] is a control; a bare A.x is just the family title
         if num.count(".") >= 2:
-            return num
+            return num if _opens_a_titled_section(rest) else None
         return "" if _looks_like_section_title(rest) else None
 
     if "." in num:
-        return f"cl-{num}"
+        return f"cl-{num}" if _opens_a_titled_section(rest) else None
 
     # Bare clause number: a title line such as "5 Leadership"
     return "" if _looks_like_section_title(rest) else None
+
+
+def _demote_container_headings(
+    segments: List[Tuple[str, str]]
+) -> List[Tuple[str, str]]:
+    """Drop the requirement_id of headings that only introduce sub-clauses.
+
+    "6.1 Actions to address risks and opportunities" carries no obligation of
+    its own: the requirements are 6.1.1–6.1.4. Evaluating the bare title as a
+    requirement produced empty cards that inflated the requirement count and
+    diluted the analysis. A heading is a container when other requirements
+    nest under it and its own body states no obligation ("shall").
+    """
+    requirement_ids = {rid for rid, _ in segments if rid}
+
+    demoted: List[Tuple[str, str]] = []
+    for requirement_id, segment in segments:
+        has_children = any(
+            other != requirement_id and other.startswith(requirement_id + ".")
+            for other in requirement_ids
+        )
+        body = segment.split("\n", 1)[1] if "\n" in segment else ""
+        if requirement_id and has_children and "shall" not in body.lower():
+            logger.debug(f"'{requirement_id}' is a container heading, not a requirement")
+            demoted.append(("", segment))
+        else:
+            demoted.append((requirement_id, segment))
+    return demoted
 
 
 def segment_by_requirement(text: str) -> List[Tuple[str, str]]:
@@ -121,6 +173,10 @@ def segment_by_requirement(text: str) -> List[Tuple[str, str]]:
             continue
         boundaries.append((match.start(), requirement_id))
 
+    # "Annex B", "Bibliography", ... close the preceding normative segment
+    boundaries.extend((match.start(), "") for match in _ANNEX_OPENER.finditer(text))
+    boundaries.sort(key=lambda boundary: boundary[0])
+
     segments: List[Tuple[str, str]] = []
 
     preamble = text[: boundaries[0][0]] if boundaries else text
@@ -133,7 +189,7 @@ def segment_by_requirement(text: str) -> List[Tuple[str, str]]:
         if segment.strip():
             segments.append((requirement_id, segment))
 
-    return segments
+    return _demote_container_headings(segments)
 
 
 _text_splitter: Optional[RecursiveCharacterTextSplitter] = None

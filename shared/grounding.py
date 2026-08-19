@@ -55,7 +55,8 @@ MIN_EVIDENCE_WORDS = 8
 _PREDICATE_WORDS = frozenset(
     {
         # Italian
-        "e", "sono", "ha", "hanno", "deve", "devono", "viene", "vengono",
+        "è", "sono", "era", "erano", "ha", "hanno", "deve", "devono",
+        "viene", "vengono",
         "definisce", "definiscono", "definito", "definita", "definiti", "definite",
         "stabilisce", "stabiliscono", "stabilito", "stabilita",
         "prevede", "prevedono", "previsto", "prevista",
@@ -70,7 +71,7 @@ _PREDICATE_WORDS = frozenset(
         "monitora", "monitorano", "riesamina", "riesaminano",
         "copre", "coprono", "include", "includono", "comprende", "comprendono",
         "utilizza", "utilizzano", "applica", "applicano", "svolge", "svolgono",
-        "nomina", "nominato", "nominata", "assegna", "assegnati", "assegnate",
+        "nominato", "nominata", "assegna", "assegnati", "assegnate",
         # English
         "is", "are", "was", "were", "has", "have", "had", "shall", "must",
         "defines", "define", "defined", "establishes", "establish", "established",
@@ -81,6 +82,24 @@ _PREDICATE_WORDS = frozenset(
         "includes", "include", "covers", "cover", "assigns", "assigned",
         "conducts", "conducted", "identifies", "identified",
     }
+)
+
+# Phrases marking a gap or a planned action rather than an implemented one.
+# Deliberately narrow: prohibitions ("non è consentito") are real controls and
+# must NOT match here.
+_ABSENCE_MARKERS = (
+    # Italian — absence
+    "non è ancora", "non è stato ancora", "non è stata ancora", "non sono ancora",
+    "non ancora", "non è presente", "non sono presenti", "non è stata definita",
+    "non è stato definito", "non esiste", "non sono in essere", "non dispone",
+    "non è formalizzat", "senza un mandato", "in via informale", "su base informale",
+    "non formalmente",
+    # Italian — plans
+    "prossimi passi", "azioni prioritarie", "roadmap", "in fase di", "si prevede",
+    "è prevista", "sono previste", "intende adottare", "percorso di adeguamento",
+    # English
+    "not yet", "will be", "is planned", "are planned", "next steps",
+    "to be established", "in progress", "we intend",
 )
 
 
@@ -115,6 +134,18 @@ def is_grounded_in(excerpt: str, source_text: str) -> bool:
 
     hits = sum(1 for gram in grams if gram in haystack)
     return (hits / len(grams)) >= MIN_CONTAINMENT
+
+
+def states_absence_or_plan(excerpt: str) -> bool:
+    """True when a citation describes a gap or a future action, not a practice.
+
+    Observed in real reports: "Non è stato ancora istituito un Comitato di
+    Governance IA" and roadmap items under "Prossimi passi" were cited as
+    evidence *supporting* compliance. Such a quote is real and substantive,
+    yet it proves the opposite of what the verdict claims.
+    """
+    text = normalize(excerpt)
+    return any(marker in text for marker in _ABSENCE_MARKERS)
 
 
 def is_substantive(excerpt: str) -> bool:
@@ -203,10 +234,22 @@ def enforce_grounding(
             "documentazione effettivamente recuperata ed è stata scartata."
         )
 
-    substantive = [ev for ev in verified if is_substantive(ev.excerpt)]
+    # A citation supports compliance only when it is substantive AND describes
+    # something already in place
+    supporting = [
+        ev for ev in verified
+        if is_substantive(ev.excerpt) and not states_absence_or_plan(ev.excerpt)
+    ]
+    gap_citations = [ev for ev in verified if states_absence_or_plan(ev.excerpt)]
 
-    if card.verdict in (Verdict.CONFORME, Verdict.PARZIALMENTE_CONFORME) and not substantive:
-        if verified:
+    if card.verdict in (Verdict.CONFORME, Verdict.PARZIALMENTE_CONFORME) and not supporting:
+        if gap_citations:
+            reason = (
+                "le evidenze citate descrivono azioni pianificate o l'assenza del "
+                "requisito, non una pratica già in essere"
+            )
+            log_reason = "only forward-looking or absence citations"
+        elif verified:
             reason = (
                 "le evidenze citate sono verificabili ma non sostanziali "
                 "(titoli, intestazioni o frammenti privi di contenuto)"
