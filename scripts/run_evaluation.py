@@ -363,6 +363,16 @@ def main() -> None:
         default=None,
         help="Override CHROMADB_PATH environment variable",
     )
+    parser.add_argument(
+        "--save-all-runs",
+        default=None,
+        help=(
+            "Optional directory to save EVERY run's report as run_<n>.json "
+            "(not just the last one). Needed for per-requirement analyses "
+            "across runs, e.g. the extended reproducibility test (see "
+            "scripts/extended_reproducibility.py)."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -383,6 +393,11 @@ def main() -> None:
     logger.info(f"Loaded {len(documents)} document(s)")
     logger.info(f"Running {args.runs} evaluation run(s)...")
 
+    save_all_dir = None
+    if args.save_all_runs:
+        save_all_dir = Path(args.save_all_runs)
+        save_all_dir.mkdir(parents=True, exist_ok=True)
+
     reports = []
     start_time = time.time()
 
@@ -401,6 +416,11 @@ def main() -> None:
             f"Run {run_num} completed in {run_elapsed:.1f}s. "
             f"Score: {report.get('overall_compliance_score', 'N/A'):.1f}"
         )
+
+        if save_all_dir:
+            run_path = save_all_dir / f"run_{run_num}.json"
+            run_path.write_text(json.dumps(report, indent=2, ensure_ascii=False))
+            logger.info(f"Run {run_num} report saved to: {run_path}")
 
     total_elapsed = time.time() - start_time
 
