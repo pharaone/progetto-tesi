@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from functools import lru_cache
-from typing import Any
+from typing import Any, Optional
 
 from dotenv import load_dotenv
 
@@ -61,8 +61,11 @@ class Settings:
     AGA_TIMEOUT: int = int(os.getenv("AGA_TIMEOUT", "600"))
     AIU_TIMEOUT: int = int(os.getenv("AIU_TIMEOUT", "300"))
 
-    # LLM temperature — always 0 for reproducibility
-    LLM_TEMPERATURE: float = 0.0
+    # LLM temperature — defaults to 0 for reproducibility. Raising it trades
+    # determinism for variety: the IR (Idempotency Rate) KPI assumes runs at
+    # the default are directly comparable, since a nonzero temperature makes
+    # verdicts vary run-to-run even on an unchanged corpus.
+    LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.0"))
 
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
@@ -73,13 +76,15 @@ def get_settings() -> Settings:
     return Settings()
 
 
-def get_llm(temperature: float = 0.0) -> Any:
+def get_llm(temperature: Optional[float] = None) -> Any:
     """
     LLM factory.
     Returns ChatOllama or ChatAnthropic based on LLM_PROVIDER env var.
-    Always uses temperature=0 for deterministic output.
+    Uses LLM_TEMPERATURE (default 0.0) unless a temperature is passed explicitly.
     """
     settings = get_settings()
+    if temperature is None:
+        temperature = settings.LLM_TEMPERATURE
 
     if settings.LLM_PROVIDER == "anthropic":
         from langchain_anthropic import ChatAnthropic

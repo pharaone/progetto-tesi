@@ -292,7 +292,7 @@ def _get_llm_summary(
             iso_context=iso_context,
         )
 
-        llm = get_llm(temperature=0.0)
+        llm = get_llm()
         from langchain_core.messages import HumanMessage
         with track_llm_call("AGA"):
             response = llm.invoke([HumanMessage(content=prompt_text)])

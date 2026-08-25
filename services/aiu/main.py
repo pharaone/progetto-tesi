@@ -191,7 +191,7 @@ def _generate_response_without_report(user_message: str, chat_history: List[Chat
         "You can answer general questions about ISO 42001."
     )
 
-    llm = get_llm(temperature=0.0)
+    llm = get_llm()
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
         messages = [SystemMessage(content=system), HumanMessage(content=user_message)]
@@ -250,7 +250,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
         system_prompt = SYSTEM_PROMPT.format(**report_data)
 
         # Build and invoke LLM
-        llm = get_llm(temperature=0.0)
+        llm = get_llm()
         try:
             messages = _build_conversation_prompt(system_prompt, chat_history, user_message)
             with track_llm_call("AIU"):

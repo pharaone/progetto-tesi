@@ -231,7 +231,7 @@ def _evaluate_requirement(
     input_hash: str,
 ) -> EvaluationCard:
     settings = get_settings()
-    llm = get_llm(temperature=0.0)
+    llm = get_llm()
     model_version = (
         settings.ANTHROPIC_MODEL
         if settings.LLM_PROVIDER == "anthropic"
