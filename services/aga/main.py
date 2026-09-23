@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -71,6 +72,7 @@ CONSOLIDATION_PROMPT = """\
 You are an ISO/IEC 42001:2023 compliance expert. You have received evaluation results from a gap analysis audit.
 
 Organization ID: {org_id}
+Overall Compliance Score (this assessment): {compliance_score:.1f}/100
 Total Requirements Evaluated: {total_requirements}
 Compliant: {compliant}
 Non-Compliant: {non_compliant}
@@ -80,7 +82,7 @@ Not Applicable: {not_applicable}
 Key Gaps Found:
 {gaps_summary}
 
-Previous Assessment Context:
+Previous Assessment Context (earlier reports; their scores are NOT the current score):
 {history_context}
 
 ISO Standard Context:
@@ -95,6 +97,18 @@ Return ONLY a JSON object:
   "critical_areas": ["<area1>", "<area2>", "<area3>"]
 }}
 """
+
+
+_SCORE_MENTION = re.compile(r"\d{1,3}(?:[.,]\d+)?\s*/\s*100")
+
+
+def _pin_score(summary: str, compliance_score: float) -> str:
+    """Replace any "N/100" figure in the LLM summary with the computed score.
+
+    The model sees earlier reports in the history context and can quote their
+    score as if it were the current one.
+    """
+    return _SCORE_MENTION.sub(f"{compliance_score:.1f}/100", summary)
 
 
 def _compute_compliance_score(cards: List[EvaluationCard]) -> float:
@@ -280,8 +294,10 @@ def _get_llm_summary(
         except Exception:
             history_context = "No previous assessments."
 
+        compliance_score = _compute_compliance_score(all_cards)
         prompt_text = CONSOLIDATION_PROMPT.format(
             org_id=org_id,
+            compliance_score=compliance_score,
             total_requirements=len(all_cards),
             compliant=counts.compliant,
             non_compliant=counts.non_compliant,
@@ -307,7 +323,11 @@ def _get_llm_summary(
                 text = text[: text.rfind("```")]
             text = text.strip()
 
-        return json.loads(text)
+        summary = json.loads(text)
+        summary["executive_summary"] = _pin_score(
+            str(summary.get("executive_summary", "")), compliance_score
+        )
+        return summary
     except Exception as exc:
         logger.warning(f"LLM summary generation failed: {exc}")
         return {

@@ -199,11 +199,13 @@ def _parse_llm_output(
             expected_document_type="policy_document",
         )
 
-    meta_data = data.get("execution_metadata", {})
+    # Execution metadata is always set server-side. The model fills the
+    # execution_metadata block of the prompt schema with invented values
+    # (placeholder hashes, past dates), so its copy is ignored.
     execution_metadata = ExecutionMetadata(
-        timestamp=str(meta_data.get("timestamp", datetime.utcnow().isoformat() + "Z")),
-        model_version=str(meta_data.get("model_version", model_version)),
-        input_hash=str(meta_data.get("input_hash", input_hash)),
+        timestamp=datetime.utcnow().isoformat() + "Z",
+        model_version=model_version,
+        input_hash=input_hash,
     )
 
     raw_verdict = str(data.get("verdict", "NON_APPLICABILE")).upper().strip()
