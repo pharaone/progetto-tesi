@@ -1014,12 +1014,17 @@ _INDEX_NOT_READY_MESSAGES = {
         "La norma ISO/IEC 42001 non è ancora indicizzata: l'analisi è bloccata finché "
         "il documento della norma non viene caricato."
     ),
+    "indexing_documents": (
+        "Indicizzazione dei documenti aziendali appena caricati o sincronizzati in corso: "
+        "l'analisi si potrà avviare al termine. Il pulsante si attiva automaticamente."
+    ),
 }
 
 
 @st.fragment(run_every=15)
 def render_analysis_start() -> None:
-    """Start button, disabled until the ISO standard is fully indexed."""
+    """Start button, disabled until the ISO standard and the company
+    documents are fully indexed."""
     readiness = api_get("/analysis/readiness") or {}
     state = readiness.get("state")
     ready = state == "ready"

@@ -134,3 +134,69 @@ def test_agents_refuse_to_analyze_until_the_index_is_ready(service, tmp_path, mo
 
     assert response.status_code == 503
     assert "still being indexed" in response.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator: documents uploaded, clarified or synced are indexed in the
+# background, and an analysis started right after would race that indexing
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def orchestrator(tmp_path, monkeypatch):
+    pytest.importorskip("langgraph")
+    monkeypatch.setenv("CHROMADB_PATH", str(tmp_path / "chromadb"))
+    iso._write_status(iso.STATE_READY)
+    import orchestrator.main as orch
+
+    monkeypatch.setattr(orch.db, "is_sync_running", lambda: False)
+    monkeypatch.setattr(orch, "_pending_doc_indexing", 0)
+    return orch
+
+
+def _run_scheduled(tasks):
+    for task in tasks.tasks:
+        task.func(*task.args, **task.kwargs)
+
+
+def test_analysis_waits_for_documents_being_indexed(orchestrator, monkeypatch):
+    from fastapi import BackgroundTasks
+
+    import rag.indexer
+
+    monkeypatch.setattr(rag.indexer, "index_text_as_org_doc", lambda *a: 3)
+    assert orchestrator._analysis_blocker() is None
+
+    tasks = BackgroundTasks()
+    orchestrator._schedule_doc_indexing(tasks, "AI policy.", "policy.txt", "org")
+
+    # Blocked as soon as the upload returns, before the task even starts
+    assert orchestrator._analysis_blocker()["state"] == "indexing_documents"
+
+    _run_scheduled(tasks)
+    assert orchestrator._analysis_blocker() is None
+
+
+def test_a_failed_document_indexing_does_not_block_forever(orchestrator, monkeypatch):
+    from fastapi import BackgroundTasks
+
+    import rag.indexer
+
+    def broken(*args):
+        raise RuntimeError("embedding failed")
+
+    monkeypatch.setattr(rag.indexer, "index_text_as_org_doc", broken)
+    tasks = BackgroundTasks()
+    orchestrator._schedule_doc_indexing(tasks, "AI policy.", "policy.txt", "org")
+    _run_scheduled(tasks)
+
+    assert orchestrator._analysis_blocker() is None
+
+
+def test_analysis_waits_for_a_running_sync(orchestrator, monkeypatch):
+    monkeypatch.setattr(orchestrator.db, "is_sync_running", lambda: True)
+    assert orchestrator._analysis_blocker()["state"] == "indexing_documents"
+
+
+def test_analysis_waits_for_the_iso_index_first(orchestrator):
+    iso._write_status(iso.STATE_INDEXING)
+    assert orchestrator._analysis_blocker()["state"] == iso.STATE_INDEXING

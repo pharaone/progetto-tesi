@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import threading
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -227,15 +228,58 @@ async def get_documents(user: Dict[str, Any] = Depends(get_current_user)) -> Lis
     return db.list_documents(uploader=user["username"])
 
 
+# Documents whose background indexing has been scheduled but not finished.
+# /analyze refuses to start while any is pending: an analysis started right
+# after an upload would otherwise race the indexing of the new documents.
+_pending_doc_indexing = 0
+_pending_doc_indexing_lock = threading.Lock()
+
+
+def _schedule_doc_indexing(
+    background_tasks: BackgroundTasks, content: str, filename: str, org_id: str
+) -> None:
+    """Count the document as pending before the response is sent, then index
+    it in the background (the task only starts after the response)."""
+    global _pending_doc_indexing
+    with _pending_doc_indexing_lock:
+        _pending_doc_indexing += 1
+    background_tasks.add_task(_index_org_doc_background, content, filename, org_id)
+
+
 def _index_org_doc_background(content: str, filename: str, org_id: str) -> None:
     """Index a document into ORG-DOCS — runs as a background task so the
     HTTP response doesn't wait for chunking + embedding."""
+    global _pending_doc_indexing
     from rag.indexer import index_text_as_org_doc
     try:
         index_text_as_org_doc(content, filename, org_id)
         logger.info(f"Background indexing completed for '{filename}'")
     except Exception as exc:
         logger.error(f"Background indexing failed for '{filename}': {exc}", exc_info=True)
+    finally:
+        with _pending_doc_indexing_lock:
+            _pending_doc_indexing -= 1
+
+
+def _analysis_blocker() -> Optional[Dict[str, str]]:
+    """Why an analysis cannot start right now, or None if it can."""
+    from rag.iso_indexing import iso_index_status
+
+    index_status = iso_index_status()
+    if index_status["state"] != "ready":
+        return {"state": index_status["state"], "message": index_status["message"]}
+
+    with _pending_doc_indexing_lock:
+        pending = _pending_doc_indexing
+    if pending or db.is_sync_running():
+        return {
+            "state": "indexing_documents",
+            "message": (
+                "Company documents are still being indexed. "
+                "Retry when indexing is complete."
+            ),
+        }
+    return None
 
 
 @app.post("/documents")
@@ -260,9 +304,7 @@ async def upload_documents(
             continue
 
         doc_id = db.add_document(filename, user["username"], content)
-        background_tasks.add_task(
-            _index_org_doc_background, content, filename, settings.ORG_ID
-        )
+        _schedule_doc_indexing(background_tasks, content, filename, settings.ORG_ID)
         saved.append({"id": doc_id, "filename": filename})
 
     if not saved:
@@ -511,13 +553,11 @@ async def analyze(
             detail="No documents uploaded yet. Upload company documents first.",
         )
 
-    # The agents read the requirements from the ISO index: starting while AS-1
-    # is still building it would evaluate only part of the standard
-    from rag.iso_indexing import iso_index_status
-
-    index_status = iso_index_status()
-    if index_status["state"] != "ready":
-        raise HTTPException(status_code=503, detail=index_status["message"])
+    # Wait for the ISO index (the agents read the requirements from it) and
+    # for the indexing of newly uploaded or synced documents
+    blocker = _analysis_blocker()
+    if blocker is not None:
+        raise HTTPException(status_code=503, detail=blocker["message"])
 
     # One analysis at a time: the agents share a single LLM backend and a
     # concurrent run would only queue on it while doubling the wait
@@ -561,12 +601,13 @@ async def analyze(
 
 @app.get("/analysis/readiness")
 async def analysis_readiness(user: Dict[str, Any] = Depends(get_current_user)) -> dict:
-    """Whether an analysis can start: the ISO standard must be fully indexed.
-    state is one of ready, indexing, failed, missing."""
-    from rag.iso_indexing import iso_index_status
-
-    status = iso_index_status()
-    return {"state": status["state"], "message": status["message"]}
+    """Whether an analysis can start: the ISO standard and the company
+    documents must be fully indexed. state is one of ready, indexing,
+    failed, missing (ISO index) or indexing_documents."""
+    blocker = _analysis_blocker()
+    if blocker is None:
+        return {"state": "ready", "message": "Ready to start an analysis."}
+    return blocker
 
 
 @app.get("/analysis/status")
@@ -772,9 +813,7 @@ async def add_clarification(
     doc_id = db.add_document(filename, user["username"], content)
 
     # Chunking + embedding happen in the background so the UI stays responsive
-    background_tasks.add_task(
-        _index_org_doc_background, content, filename, settings.ORG_ID
-    )
+    _schedule_doc_indexing(background_tasks, content, filename, settings.ORG_ID)
 
     logger.info(
         f"Clarification added: report={report_id}, requirement={request.requirement_id}, "
