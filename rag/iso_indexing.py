@@ -7,10 +7,13 @@ hook, which automatically indexes the ISO documents mounted at
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import re
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from rag.collections import (
     COLLECTION_ISO_CL456,
@@ -77,6 +80,67 @@ def find_iso_files(docs_dir: str) -> List[Path]:
     return sorted(files)
 
 
+# ---------------------------------------------------------------------------
+# Indexing status
+#
+# Kept in a file next to the ChromaDB data, which every service mounts, so the
+# orchestrator and all agents can refuse to start an analysis while the
+# standard is still being indexed (a partial index would silently yield
+# fewer requirements and missing ISO context).
+# ---------------------------------------------------------------------------
+
+STATE_READY = "ready"
+STATE_INDEXING = "indexing"
+STATE_FAILED = "failed"
+STATE_MISSING = "missing"
+
+_STATUS_MESSAGES = {
+    STATE_READY: "The ISO/IEC 42001 index is complete.",
+    STATE_INDEXING: (
+        "The ISO/IEC 42001 standard is still being indexed. "
+        "Retry when indexing is complete."
+    ),
+    STATE_FAILED: (
+        "ISO/IEC 42001 indexing failed. Check the AS-1 logs, then restart AS-1 "
+        "or run scripts/index_iso.py --reset."
+    ),
+    STATE_MISSING: (
+        "The ISO/IEC 42001 standard is not indexed. Place the ISO file in "
+        "iso_docs/ and restart AS-1, or run scripts/index_iso.py."
+    ),
+}
+
+
+def _status_path() -> Path:
+    return Path(os.getenv("CHROMADB_PATH", "/data/chromadb")) / "iso_index_status.json"
+
+
+def _write_status(state: str, **details: Any) -> None:
+    path = _status_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"state": state, "updated_at": datetime.utcnow().isoformat() + "Z", **details}
+    # Write-then-rename so readers never see a half-written file
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, indent=2))
+    os.replace(tmp, path)
+
+
+def iso_index_status() -> Dict[str, Any]:
+    """Current indexing state: ready, indexing, failed or missing, with a message."""
+    try:
+        status = json.loads(_status_path().read_text())
+    except (OSError, ValueError):
+        status = {"state": STATE_MISSING}
+    if status.get("state") not in _STATUS_MESSAGES:
+        status = {"state": STATE_MISSING}
+    status["message"] = _STATUS_MESSAGES[status["state"]]
+    return status
+
+
+def iso_index_ready() -> bool:
+    return iso_index_status()["state"] == STATE_READY
+
+
 def index_directory(docs_dir: str, dry_run: bool = False, reset: bool = False) -> Dict[str, int]:
     """
     Index all ISO documents in the given directory.
@@ -103,15 +167,47 @@ def index_directory(docs_dir: str, dry_run: bool = False, reset: bool = False) -
 
     logger.info(f"Found {len(files)} document(s) in {docs_dir}")
 
-    if not dry_run:
+    if dry_run:
+        summary, _ = _index_files(files, dry_run=True)
+        return summary
+
+    _write_status(STATE_INDEXING, files=[f.name for f in files])
+    try:
         logger.info("Initializing ChromaDB collections...")
         initialize_collections()
         if reset:
             for name in ISO_COLLECTIONS:
                 logger.info(f"Resetting collection '{name}'...")
                 reset_collection(name)
+        summary, failed = _index_files(files, dry_run=False)
+    except Exception as exc:
+        _write_status(STATE_FAILED, error=str(exc))
+        raise
 
+    if failed or summary.get(COLLECTION_ISO_FULL, 0) == 0:
+        _write_status(
+            STATE_FAILED,
+            error=f"failed files: {failed}" if failed else "no chunks indexed",
+            chunks=summary,
+        )
+    else:
+        _write_status(STATE_READY, chunks=summary)
+
+    logger.info("Indexing complete. Summary:")
+    for collection, count in summary.items():
+        logger.info(f"  {collection}: {count} chunks")
+
+    return summary
+
+
+def _index_files(files: List[Path], dry_run: bool) -> Tuple[Dict[str, int], List[str]]:
+    """Index each file into its collections.
+
+    Returns the chunk count per collection and the names of the files that
+    failed to index.
+    """
     summary: Dict[str, int] = {name: 0 for name in ISO_COLLECTIONS}
+    failed: List[str] = []
 
     for file_path in files:
         collections = determine_collections(file_path.name)
@@ -127,53 +223,61 @@ def index_directory(docs_dir: str, dry_run: bool = False, reset: bool = False) -
                 summary[collection_name] = summary.get(collection_name, 0) + chunks_indexed
                 logger.info(f"  Indexed {chunks_indexed} chunks into {collection_name}")
             except Exception as exc:
+                failed.append(file_path.name)
                 logger.error(
                     f"  Failed to index {file_path.name} into {collection_name}: {exc}",
                     exc_info=True,
                 )
 
-    if not dry_run:
-        logger.info("Indexing complete. Summary:")
-        for collection, count in summary.items():
-            logger.info(f"  {collection}: {count} chunks")
-
-    return summary
+    return summary, failed
 
 
 def ensure_iso_indexed(docs_dir: str) -> None:
     """
     Auto-index the ISO standard at service startup (idempotent).
 
-    If the ISO-FULL collection already contains chunks, does nothing.
-    Otherwise indexes every supported file found in docs_dir. Intended
-    to be called in a background thread from AS-1's startup hook so a
-    fresh company instance needs no manual indexing step.
+    Does nothing when the status file says a previous indexing completed.
+    Otherwise (never indexed, interrupted by a restart, failed, or indexed
+    before the status file existed) rebuilds the ISO collections from
+    docs_dir, so the index is known to be complete. Intended to be called in
+    a background thread from AS-1's startup hook.
     """
+    if iso_index_ready():
+        logger.info("ISO index already complete — skipping auto-indexing")
+        return
+
     files = find_iso_files(docs_dir)
     if not files:
+        _adopt_existing_index(docs_dir)
+        return
+
+    logger.info(
+        f"ISO index not marked complete — indexing {len(files)} file(s) from {docs_dir}..."
+    )
+    try:
+        index_directory(docs_dir, reset=True)
+        logger.info("Automatic ISO indexing completed")
+    except Exception as exc:
+        logger.error(f"Automatic ISO indexing failed: {exc}", exc_info=True)
+
+
+def _adopt_existing_index(docs_dir: str) -> None:
+    """No ISO files to index from: keep an index built earlier by hand, if any."""
+    try:
+        count: Optional[int] = get_collection(COLLECTION_ISO_FULL).count()
+    except Exception as exc:
+        logger.error(f"Could not check ISO-FULL collection: {exc}", exc_info=True)
+        count = None
+
+    if count:
+        logger.info(
+            f"No ISO documents in {docs_dir}, but {COLLECTION_ISO_FULL} already has "
+            f"{count} chunks — treating the existing index as complete"
+        )
+        _write_status(STATE_READY, chunks={COLLECTION_ISO_FULL: count}, adopted=True)
+    else:
         logger.info(
             f"No ISO documents found in {docs_dir} — skipping auto-indexing. "
             f"Place the ISO 42001 file (txt/pdf) there and restart, or run "
             f"scripts/index_iso.py manually."
         )
-        return
-
-    try:
-        count = get_collection(COLLECTION_ISO_FULL).count()
-    except Exception as exc:
-        logger.error(f"Could not check ISO-FULL collection: {exc}", exc_info=True)
-        return
-
-    if count > 0:
-        logger.info(
-            f"ISO already indexed ({count} chunks in {COLLECTION_ISO_FULL}) — "
-            f"skipping auto-indexing"
-        )
-        return
-
-    logger.info(f"ISO-FULL is empty — auto-indexing {len(files)} file(s) from {docs_dir}...")
-    try:
-        index_directory(docs_dir)
-        logger.info("Automatic ISO indexing completed")
-    except Exception as exc:
-        logger.error(f"Automatic ISO indexing failed: {exc}", exc_info=True)

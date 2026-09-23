@@ -4,9 +4,10 @@
 Usage:
     python scripts/index_iso.py --docs-dir /path/to/iso/docs [--dry-run] [--reset]
 
-NOTE: AS-1 also indexes /app/iso_docs automatically at startup when the
-ISO-FULL collection is empty (see rag/iso_indexing.py). This script is
+NOTE: AS-1 also indexes /app/iso_docs automatically at startup unless a
+previous indexing completed (see rag/iso_indexing.py). This script is
 for manual/forced re-indexing, e.g. after updating the ISO text file.
+While it runs, new analyses are refused until indexing completes.
 
 The script assigns documents to collections based on filename patterns:
     - *cl4* | *cl5* | *cl6* | *clause4* | *clause5* | *clause6* → ISO-CL456

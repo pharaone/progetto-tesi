@@ -44,6 +44,7 @@ from rag.collections import (
     query as rag_query,
     query_iso_with_fallback,
 )
+from rag.iso_indexing import iso_index_status
 from rag.requirements_loader import (
     load_requirements_from_rag,
     strip_informative_notes,
@@ -330,6 +331,11 @@ async def analyze(request: AnalyzeRequest) -> List[EvaluationCard]:
 
     if not request.documents:
         raise HTTPException(status_code=400, detail="At least one document is required")
+
+    # A partial ISO index would silently yield fewer requirements
+    index_status = iso_index_status()
+    if index_status["state"] != "ready":
+        raise HTTPException(status_code=503, detail=index_status["message"])
 
     # Load requirements from ISO RAG collection
     requirements = load_requirements_from_rag(COLLECTION_ISO_CL78_A26, _AS2_PREFIXES)

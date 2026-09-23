@@ -1001,6 +1001,42 @@ def render_documents_section(can_upload: bool) -> None:
 # Analysis status (async job pattern — polls GET /analysis/status)
 # ---------------------------------------------------------------------------
 
+_INDEX_NOT_READY_MESSAGES = {
+    "indexing": (
+        "Indicizzazione della norma ISO/IEC 42001 in corso: l'analisi si potrà avviare "
+        "al termine. Il pulsante si attiva automaticamente."
+    ),
+    "failed": (
+        "L'indicizzazione della norma ISO/IEC 42001 non è andata a buon fine: l'analisi "
+        "è bloccata. Contatta l'amministratore (log del servizio AS-1)."
+    ),
+    "missing": (
+        "La norma ISO/IEC 42001 non è ancora indicizzata: l'analisi è bloccata finché "
+        "il documento della norma non viene caricato."
+    ),
+}
+
+
+@st.fragment(run_every=15)
+def render_analysis_start() -> None:
+    """Start button, disabled until the ISO standard is fully indexed."""
+    readiness = api_get("/analysis/readiness") or {}
+    state = readiness.get("state")
+    ready = state == "ready"
+    if not ready:
+        st.warning(_INDEX_NOT_READY_MESSAGES.get(
+            state, "Impossibile verificare lo stato dell'indicizzazione della norma."
+        ))
+
+    if st.button("Avvia Analisi", type="primary", disabled=not ready):
+        result = api_post("/analyze", timeout=60.0)
+        if result:
+            st.success(
+                f"Analisi #{result.get('report_id')} avviata in background. "
+                "Puoi continuare a usare l'applicazione — lo stato si aggiorna qui sotto."
+            )
+
+
 @st.fragment(run_every=15)
 def render_analysis_status() -> None:
     """Auto-refreshing status of the latest analysis (every 15s)."""
@@ -1110,14 +1146,7 @@ def render_employee_view() -> None:
             "da alcuni minuti a oltre un'ora con inferenza su CPU."
         )
 
-        if st.button("Avvia Analisi", type="primary"):
-            result = api_post("/analyze", timeout=60.0)
-            if result:
-                st.success(
-                    f"Analisi #{result.get('report_id')} avviata in background. "
-                    "Puoi continuare a usare l'applicazione — lo stato si aggiorna qui sotto."
-                )
-
+        render_analysis_start()
         render_analysis_status()
 
     with tab_reports:

@@ -511,6 +511,14 @@ async def analyze(
             detail="No documents uploaded yet. Upload company documents first.",
         )
 
+    # The agents read the requirements from the ISO index: starting while AS-1
+    # is still building it would evaluate only part of the standard
+    from rag.iso_indexing import iso_index_status
+
+    index_status = iso_index_status()
+    if index_status["state"] != "ready":
+        raise HTTPException(status_code=503, detail=index_status["message"])
+
     # One analysis at a time: the agents share a single LLM backend and a
     # concurrent run would only queue on it while doubling the wait
     if db.has_running_report():
@@ -549,6 +557,16 @@ async def analyze(
             ),
         }
     )
+
+
+@app.get("/analysis/readiness")
+async def analysis_readiness(user: Dict[str, Any] = Depends(get_current_user)) -> dict:
+    """Whether an analysis can start: the ISO standard must be fully indexed.
+    state is one of ready, indexing, failed, missing."""
+    from rag.iso_indexing import iso_index_status
+
+    status = iso_index_status()
+    return {"state": status["state"], "message": status["message"]}
 
 
 @app.get("/analysis/status")
